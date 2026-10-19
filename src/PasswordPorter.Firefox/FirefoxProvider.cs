@@ -144,13 +144,13 @@ public sealed class FirefoxProvider : ICredentialSourceProvider, IProfileDiscove
             var hostname = login.GetString("hostname");
             var credential = new Credential
             {
-                Title = UrlHelper.GetHost(hostname) ?? hostname,
+                Title = Uri.TryCreate(hostname, UriKind.Absolute, out var uri) && uri.Host.Length > 0 ? uri.Host : hostname,
                 Url = hostname,
                 Username = Decrypt(session, login.GetString("encryptedUsername")),
                 Password = Decrypt(session, login.GetString("encryptedPassword")),
-                Created = UrlHelper.FromUnixMilliseconds(login.GetInt64("timeCreated")),
-                Modified = UrlHelper.FromUnixMilliseconds(login.GetInt64("timePasswordChanged")),
-                LastUsed = UrlHelper.FromUnixMilliseconds(login.GetInt64("timeLastUsed")),
+                Created = FromUnixMs(login.GetInt64("timeCreated")),
+                Modified = FromUnixMs(login.GetInt64("timePasswordChanged")),
+                LastUsed = FromUnixMs(login.GetInt64("timeLastUsed")),
             };
 
             // Basic-auth logins have a realm instead of a form; keep it so nothing is lost.
@@ -159,6 +159,10 @@ public sealed class FirefoxProvider : ICredentialSourceProvider, IProfileDiscove
                 credential.Fields["HTTP Realm"] = realm!;
             return credential;
         }
+
+        // Firefox stores 0 for "never", which should stay unknown rather than become 1970.
+        static DateTime? FromUnixMs(long? ms) =>
+            ms > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(ms.Value).UtcDateTime : (DateTime?)null;
 
         static string? Decrypt(NssSession session, string? base64) =>
             string.IsNullOrEmpty(base64) ? null : session.DecryptString(base64!);

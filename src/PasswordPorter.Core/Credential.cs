@@ -37,7 +37,9 @@ public sealed class Credential
         {
             if (!string.IsNullOrEmpty(Title))
                 return Title!;
-            return UrlHelper.GetHost(Url) ?? Url ?? "(untitled)";
+            if (Uri.TryCreate(Url, UriKind.Absolute, out var uri) && uri.Host.Length > 0)
+                return uri.Host;
+            return Url ?? "(untitled)";
         }
     }
 
