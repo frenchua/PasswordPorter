@@ -11,7 +11,7 @@ internal static class CryptoUtil
 
     static byte[] Hash(HashAlgorithmName algorithm, byte[]? hmacKey, ReadOnlySpan<byte[]> parts)
     {
-        using var hash = hmacKey == null ? IncrementalHash.CreateHash(algorithm) : IncrementalHash.CreateHMAC(algorithm, hmacKey);
+        using var hash = hmacKey is null ? IncrementalHash.CreateHash(algorithm) : IncrementalHash.CreateHMAC(algorithm, hmacKey);
         foreach (var part in parts)
             hash.AppendData(part);
         return hash.GetHashAndReset();

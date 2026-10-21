@@ -7,7 +7,7 @@ public static class Csv
 {
     public static IEnumerable<string[]> Read(TextReader reader, char delimiter = ',')
     {
-        var row = new List<string>();
+        List<string> row = [];
         var field = new StringBuilder();
         bool inQuotes = false, rowHasContent = false;
         int c;
@@ -17,24 +17,21 @@ public static class Csv
             var ch = (char)c;
             if (inQuotes)
             {
-                if (ch == '"')
-                {
-                    if (reader.Peek() == '"') { reader.Read(); field.Append('"'); }
-                    else inQuotes = false;
-                }
-                else field.Append(ch);
+                if (ch != '"') field.Append(ch);
+                else if (reader.Peek() == '"') { reader.Read(); field.Append('"'); }
+                else inQuotes = false;
                 continue;
             }
 
             if (ch == '"') { inQuotes = true; rowHasContent = true; }
             else if (ch == delimiter) { row.Add(field.ToString()); field.Clear(); rowHasContent = true; }
-            else if (ch == '\r' || ch == '\n')
+            else if (ch is '\r' or '\n')
             {
                 if (ch == '\r' && reader.Peek() == '\n') reader.Read();
                 if (rowHasContent || field.Length > 0)
                 {
                     row.Add(field.ToString());
-                    yield return row.ToArray();
+                    yield return [.. row];
                 }
                 row.Clear(); field.Clear(); rowHasContent = false;
             }
@@ -44,23 +41,17 @@ public static class Csv
         if (rowHasContent || field.Length > 0)
         {
             row.Add(field.ToString());
-            yield return row.ToArray();
+            yield return [.. row];
         }
     }
 
     public static void WriteRow(TextWriter writer, IEnumerable<string?> fields, char delimiter = ',')
     {
-        bool first = true;
-        foreach (var f in fields)
-        {
-            if (!first) writer.Write(delimiter);
-            first = false;
-            var value = f ?? "";
-            if (value.IndexOfAny(new[] { delimiter, '"', '\r', '\n' }) >= 0 || value.StartsWith(" ") || value.EndsWith(" "))
-                writer.Write("\"" + value.Replace("\"", "\"\"") + "\"");
-            else
-                writer.Write(value);
-        }
+        char[] needsQuotes = [delimiter, '"', '\r', '\n'];
+        writer.Write(string.Join(delimiter, fields.Select(f => f ?? "").Select(value =>
+            value.IndexOfAny(needsQuotes) >= 0 || value.StartsWith(' ') || value.EndsWith(' ')
+                ? $"\"{value.Replace("\"", "\"\"")}\""
+                : value)));
         writer.Write("\r\n");
     }
 }

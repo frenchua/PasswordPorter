@@ -1,5 +1,4 @@
 using System.Text;
-using PasswordPorter.Text;
 
 namespace PasswordPorter.Providers.Csv;
 
@@ -9,67 +8,63 @@ namespace PasswordPorter.Providers.Csv;
 /// </summary>
 public sealed class CsvProvider : ICredentialSourceProvider, ICredentialTargetProvider
 {
-    public ProviderInfo Info { get; } = new ProviderInfo(
+    const string StdIo = "-";
+
+    public ProviderInfo Info { get; } = new(
         "csv", "CSV file", ProviderKind.File,
         "Unencrypted CSV. Reads exports from Firefox, Chrome, Bitwarden, KeePass and similar; writes a generic layout.");
 
     public IReadOnlyList<ProviderOption> SourceOptions { get; } =
     [
-        new ProviderOption("file", "CSV file to read, or '-' for standard input.", IsRequired: true),
-        new ProviderOption("delimiter", "Field delimiter.", DefaultValue: ","),
+        new("file", "CSV file to read, or '-' for standard input.", IsRequired: true),
+        new("delimiter", "Field delimiter.", DefaultValue: ","),
     ];
 
     public IReadOnlyList<ProviderOption> TargetOptions { get; } =
     [
-        new ProviderOption("file", "CSV file to write, or '-' for standard output.", IsRequired: true),
-        new ProviderOption("delimiter", "Field delimiter.", DefaultValue: ","),
-        new ProviderOption("overwrite", "Replace the file if it already exists.", DefaultValue: "false"),
+        new("file", "CSV file to write, or '-' for standard output.", IsRequired: true),
+        new("delimiter", "Field delimiter.", DefaultValue: ","),
+        new("overwrite", "Replace the file if it already exists.", DefaultValue: "false"),
     ];
 
-    public ICredentialSource OpenSource(ProviderContext context) =>
-        new Source(context.GetRequired("file"), GetDelimiter(context));
+    public ICredentialSource OpenSource(ProviderContext context)
+    {
+        var file = context.GetRequired("file");
+        if (file != StdIo && !File.Exists(file))
+            throw new ProviderException($"File not found: {file}");
+        return new Source(file, GetDelimiter(context));
+    }
 
     public ICredentialTarget OpenTarget(ProviderContext context)
     {
         var file = context.GetRequired("file");
-        if (file != "-" && File.Exists(file) && !context.GetBool("overwrite"))
+        if (file != StdIo && File.Exists(file) && !context.GetBool("overwrite"))
             throw new ProviderException($"'{file}' already exists. Pass overwrite=true to replace it.");
         context.Interaction.Warn("CSV files are not encrypted. Delete the file securely once you are done with it.");
         return new Target(file, GetDelimiter(context));
     }
 
-    static char GetDelimiter(ProviderContext context)
+    static char GetDelimiter(ProviderContext context) => (context.Get("delimiter") ?? ",") switch
     {
-        var d = context.Get("delimiter") ?? ",";
-        if (d == "\\t" || d.Equals("tab", StringComparison.OrdinalIgnoreCase)) return '\t';
-        if (d.Length != 1) throw new ProviderException("Option 'delimiter' must be a single character.");
-        return d[0];
-    }
+        @"\t" => '\t',
+        var d when d.Equals("tab", StringComparison.OrdinalIgnoreCase) => '\t',
+        [var c] => c,
+        _ => throw new ProviderException("Option 'delimiter' must be a single character."),
+    };
 
     // Column-name aliases, all compared case-insensitively.
-    static readonly string[] TitleColumns = { "title", "name", "account" };
-    static readonly string[] UrlColumns = { "url", "login_uri", "uri", "website", "web site", "hostname", "origin" };
-    static readonly string[] UsernameColumns = { "username", "login_username", "user name", "user", "login", "email" };
-    static readonly string[] PasswordColumns = { "password", "login_password" };
-    static readonly string[] NotesColumns = { "notes", "note", "comments", "extra" };
-    static readonly string[] FolderColumns = { "folder", "group", "grouping", "path" };
+    static readonly string[] TitleColumns = ["title", "name", "account"];
+    static readonly string[] UrlColumns = ["url", "login_uri", "uri", "website", "web site", "hostname", "origin"];
+    static readonly string[] UsernameColumns = ["username", "login_username", "user name", "user", "login", "email"];
+    static readonly string[] PasswordColumns = ["password", "login_password"];
+    static readonly string[] NotesColumns = ["notes", "note", "comments", "extra"];
+    static readonly string[] FolderColumns = ["folder", "group", "grouping", "path"];
 
-    internal sealed class Source : ICredentialSource
+    sealed class Source(string file, char delimiter) : ICredentialSource
     {
-        readonly string file;
-        readonly char delimiter;
-
-        public Source(string file, char delimiter)
-        {
-            if (file != "-" && !File.Exists(file))
-                throw new ProviderException($"File not found: {file}");
-            this.file = file;
-            this.delimiter = delimiter;
-        }
-
         public IReadOnlyList<Credential> ReadCredentials()
         {
-            if (file == "-")
+            if (file == StdIo)
                 return Read(Console.In);
             using var reader = new StreamReader(file, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
             return Read(reader);
@@ -79,17 +74,17 @@ public sealed class CsvProvider : ICredentialSourceProvider, ICredentialTargetPr
         {
             using var rows = Text.Csv.Read(reader, delimiter).GetEnumerator();
             if (!rows.MoveNext())
-                return Array.Empty<Credential>();
+                return [];
 
             var header = rows.Current.Select(h => h.Trim().TrimStart('﻿')).ToArray();
-            int Find(string[] names) => Array.FindIndex(header, h => names.Any(n => n.Equals(h, StringComparison.OrdinalIgnoreCase)));
+            int Find(string[] names) => Array.FindIndex(header, h => names.Contains(h, StringComparer.OrdinalIgnoreCase));
             int title = Find(TitleColumns), url = Find(UrlColumns), user = Find(UsernameColumns),
                 pass = Find(PasswordColumns), notes = Find(NotesColumns), folder = Find(FolderColumns);
             if (url < 0 && user < 0 && pass < 0)
                 throw new ProviderException("The CSV header has no url, username or password column.");
-            var known = new HashSet<int> { title, url, user, pass, notes, folder };
+            HashSet<int> known = [title, url, user, pass, notes, folder];
 
-            var result = new List<Credential>();
+            List<Credential> result = [];
             while (rows.MoveNext())
             {
                 var row = rows.Current;
@@ -103,14 +98,11 @@ public sealed class CsvProvider : ICredentialSourceProvider, ICredentialTargetPr
                     Password = Cell(pass),
                     Notes = Cell(notes),
                 };
-                var f = Cell(folder);
-                if (f != null)
-                    foreach (var part in f.Split('/', '\\'))
-                        if (part.Length > 0) c.Folder.Add(part);
+                foreach (var part in Cell(folder)?.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries) ?? [])
+                    c.Folder.Add(part);
                 for (int i = 0; i < header.Length; i++)
                 {
-                    var value = Cell(i);
-                    if (!known.Contains(i) && value != null && header[i].Length > 0)
+                    if (!known.Contains(i) && header[i].Length > 0 && Cell(i) is { } value)
                         c.Fields[header[i]] = value;
                 }
                 result.Add(c);
@@ -121,38 +113,29 @@ public sealed class CsvProvider : ICredentialSourceProvider, ICredentialTargetPr
         public void Dispose() { }
     }
 
-    internal sealed class Target : ICredentialTarget
+    sealed class Target(string file, char delimiter) : ICredentialTarget
     {
-        readonly string file;
-        readonly char delimiter;
-
-        public Target(string file, char delimiter)
-        {
-            this.file = file;
-            this.delimiter = delimiter;
-        }
-
         public WriteResult Write(IReadOnlyList<Credential> credentials)
         {
-            var extra = credentials.SelectMany(c => c.Fields.Keys).Distinct(StringComparer.Ordinal).OrderBy(k => k, StringComparer.Ordinal).ToList();
-            var writer = file == "-" ? Console.Out : new StreamWriter(file, false, new UTF8Encoding(false));
+            var extra = credentials.SelectMany(c => c.Fields.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+            var writer = file == StdIo ? Console.Out : new StreamWriter(file, false, new UTF8Encoding(false));
             try
             {
-                Text.Csv.WriteRow(writer, new[] { "title", "url", "username", "password", "notes", "folder" }.Concat(extra), delimiter);
+                Text.Csv.WriteRow(writer, ["title", "url", "username", "password", "notes", "folder", .. extra], delimiter);
                 foreach (var c in credentials)
                 {
-                    var row = new List<string?> { c.Title, c.Url, c.Username, c.Password, c.Notes, string.Join("/", c.Folder) };
-                    foreach (var key in extra)
-                        row.Add(c.Fields.TryGetValue(key, out var v) ? v : null);
-                    Text.Csv.WriteRow(writer, row, delimiter);
+                    Text.Csv.WriteRow(writer,
+                        [c.Title, c.Url, c.Username, c.Password, c.Notes, string.Join("/", c.Folder),
+                         .. extra.Select(key => c.Fields.TryGetValue(key, out var v) ? v : null)],
+                        delimiter);
                 }
             }
             finally
             {
-                if (file == "-") writer.Flush();
+                if (file == StdIo) writer.Flush();
                 else writer.Dispose();
             }
-            return new WriteResult(credentials.Count, 0, file == "-" ? "standard output" : Path.GetFullPath(file));
+            return new(credentials.Count, 0, file == StdIo ? "standard output" : Path.GetFullPath(file));
         }
 
         public void Dispose() { }

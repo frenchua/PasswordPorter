@@ -20,18 +20,16 @@ internal sealed class ConsoleInteraction : IUserInteraction
         while (true)
         {
             var first = ReadMasked(prompt);
-            if (first == null || !confirm)
+            if (first is null || !confirm)
                 return first;
             var second = ReadMasked("Repeat to confirm: ");
-            if (second == null)
-                return null;
-            if (first == second)
-                return first;
+            if (second is null || first == second)
+                return second;
             Console.Error.WriteLine("The passwords do not match. Try again.");
         }
     }
 
-    public void Warn(string message) => Console.Error.WriteLine("warning: " + message);
+    public void Warn(string message) => Console.Error.WriteLine($"warning: {message}");
 
     /// <summary>Reads a line without echoing it. Escape cancels (returns null).</summary>
     static string? ReadMasked(string prompt)
@@ -49,19 +47,13 @@ internal sealed class ConsoleInteraction : IUserInteraction
                 case ConsoleKey.Escape:
                     Console.Error.WriteLine();
                     return null;
-                case ConsoleKey.Backspace:
-                    if (sb.Length > 0)
-                    {
-                        sb.Length--;
-                        Console.Error.Write("\b \b");
-                    }
+                case ConsoleKey.Backspace when sb.Length > 0:
+                    sb.Length--;
+                    Console.Error.Write("\b \b");
                     break;
-                default:
-                    if (!char.IsControl(key.KeyChar))
-                    {
-                        sb.Append(key.KeyChar);
-                        Console.Error.Write('*');
-                    }
+                case not ConsoleKey.Backspace when !char.IsControl(key.KeyChar):
+                    sb.Append(key.KeyChar);
+                    Console.Error.Write('*');
                     break;
             }
         }

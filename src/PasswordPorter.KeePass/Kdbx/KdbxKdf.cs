@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using PasswordPorter.KeePass.Crypto;
 
 namespace PasswordPorter.KeePass.Kdbx;
@@ -26,22 +25,20 @@ public sealed class KdbxKdfSettings
     internal VariantDictionary ToParameters()
     {
         var p = new VariantDictionary();
-        switch (Algorithm)
+        if (Algorithm == KdbxKdfAlgorithm.AesKdf)
         {
-            case KdbxKdfAlgorithm.AesKdf:
-                p.SetBytes("$UUID", KdbxUuids.KdfAes);
-                p.SetUInt64("R", Iterations);
-                p.SetBytes("S", RandomNumberGenerator.GetBytes(32));
-                break;
-            default:
-                p.SetBytes("$UUID", Algorithm == KdbxKdfAlgorithm.Argon2d ? KdbxUuids.KdfArgon2d : KdbxUuids.KdfArgon2id);
-                p.SetBytes("S", RandomNumberGenerator.GetBytes(32));
-                p.SetUInt32("P", Parallelism);
-                p.SetUInt64("M", MemoryBytes);
-                p.SetUInt64("I", Iterations);
-                p.SetUInt32("V", Argon2.Version13);
-                break;
+            p.SetBytes("$UUID", KdbxUuids.KdfAes);
+            p.SetUInt64("R", Iterations);
+            p.SetBytes("S", RandomNumberGenerator.GetBytes(32));
+            return p;
         }
+
+        p.SetBytes("$UUID", Algorithm == KdbxKdfAlgorithm.Argon2d ? KdbxUuids.KdfArgon2d : KdbxUuids.KdfArgon2id);
+        p.SetBytes("S", RandomNumberGenerator.GetBytes(32));
+        p.SetUInt32("P", Parallelism);
+        p.SetUInt64("M", MemoryBytes);
+        p.SetUInt64("I", Iterations);
+        p.SetUInt32("V", Argon2.Version13);
         return p;
     }
 }
@@ -59,10 +56,9 @@ internal static class KdbxKdf
             return AesKdf(compositeKey, seed, rounds);
         }
 
-        Argon2Type type;
-        if (KdbxUuids.Equal(uuid, KdbxUuids.KdfArgon2d)) type = Argon2Type.Argon2d;
-        else if (KdbxUuids.Equal(uuid, KdbxUuids.KdfArgon2id)) type = Argon2Type.Argon2id;
-        else throw new KdbxFormatException("Unsupported key derivation function.");
+        var type = KdbxUuids.Equal(uuid, KdbxUuids.KdfArgon2d) ? Argon2Type.Argon2d
+            : KdbxUuids.Equal(uuid, KdbxUuids.KdfArgon2id) ? Argon2Type.Argon2id
+            : throw new KdbxFormatException("Unsupported key derivation function.");
 
         var salt = p.GetBytes("S") ?? throw new KdbxFormatException("Argon2 salt missing.");
         var parallelism = p.GetUInt32("P") ?? throw new KdbxFormatException("Argon2 parallelism missing.");
@@ -77,30 +73,24 @@ internal static class KdbxKdf
     }
 
     /// <summary>Gives the parameters fresh random salt/seed, as KeePass does on every save.</summary>
-    public static void Reseed(VariantDictionary p)
-    {
-        var current = p.GetBytes("S");
-        p.SetBytes("S", RandomNumberGenerator.GetBytes(current?.Length > 0 ? current!.Length : 32));
-    }
+    public static void Reseed(VariantDictionary p) =>
+        p.SetBytes("S", RandomNumberGenerator.GetBytes(p.GetBytes("S") is { Length: > 0 } current ? current.Length : 32));
 
     static byte[] AesKdf(byte[] key, byte[] seed, ulong rounds)
     {
         using var aes = Aes.Create();
-        aes.Mode = CipherMode.ECB;
-        aes.Padding = PaddingMode.None;
         aes.Key = seed;
-        using var enc = aes.CreateEncryptor();
 
         var a = (byte[])key.Clone();
         var b = new byte[32];
         for (ulong i = 0; i < rounds; i++)
         {
-            enc.TransformBlock(a, 0, 32, b, 0);
-            var t = a; a = b; b = t;
+            aes.EncryptEcb(a, b, PaddingMode.None);
+            (a, b) = (b, a);
         }
         var result = CryptoUtil.Sha256(a);
-        Array.Clear(a, 0, a.Length);
-        Array.Clear(b, 0, b.Length);
+        CryptographicOperations.ZeroMemory(a);
+        CryptographicOperations.ZeroMemory(b);
         return result;
     }
 }

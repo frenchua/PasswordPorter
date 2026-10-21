@@ -7,7 +7,9 @@ namespace PasswordPorter.Providers;
 /// </summary>
 public sealed class ProviderContext
 {
-    readonly Dictionary<string, string> settings;
+    const string EnvSuffix = "-env";
+
+    readonly Dictionary<string, string> settings = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, ProviderOption> options;
 
     /// <summary>
@@ -17,48 +19,35 @@ public sealed class ProviderContext
     public ProviderContext(IReadOnlyList<ProviderOption> options, IDictionary<string, string>? settings, IUserInteraction? interaction = null)
     {
         this.options = options.ToDictionary(o => o.Name, StringComparer.OrdinalIgnoreCase);
-        this.settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         Interaction = interaction ?? NonInteractive.Instance;
 
-        if (settings != null)
+        foreach (var (key, value) in settings?.AsEnumerable() ?? [])
         {
-            foreach (var pair in settings)
+            if (!IsKnown(key))
             {
-                if (!IsKnown(pair.Key))
-                {
-                    var known = string.Join(", ", options.Select(o => o.Name));
-                    throw new ProviderException($"Unknown option '{pair.Key}'. Valid options: {(known.Length == 0 ? "(none)" : known)}.");
-                }
-                this.settings[pair.Key] = pair.Value;
+                var known = string.Join(", ", options.Select(o => o.Name));
+                throw new ProviderException($"Unknown option '{key}'. Valid options: {(known is "" ? "(none)" : known)}.");
             }
+            this.settings[key] = value;
         }
 
-        foreach (var option in options)
-        {
-            if (option.IsRequired && !option.IsSecret && Get(option.Name) == null)
-                throw new ProviderException($"Missing required option '{option.Name}': {option.Description}");
-        }
+        if (options.FirstOrDefault(o => o is { IsRequired: true, IsSecret: false } && Get(o.Name) is null) is { } missing)
+            throw new ProviderException($"Missing required option '{missing.Name}': {missing.Description}");
     }
 
     public IUserInteraction Interaction { get; }
 
-    bool IsKnown(string name)
-    {
-        if (options.ContainsKey(name))
-            return true;
-        const string envSuffix = "-env";
-        return name.EndsWith(envSuffix, StringComparison.OrdinalIgnoreCase)
-            && options.TryGetValue(name.Substring(0, name.Length - envSuffix.Length), out var o)
-            && o.IsSecret;
-    }
+    bool IsKnown(string name) =>
+        options.ContainsKey(name)
+        || (name.EndsWith(EnvSuffix, StringComparison.OrdinalIgnoreCase)
+            && options.TryGetValue(name[..^EnvSuffix.Length], out var o)
+            && o.IsSecret);
 
     /// <summary>The setting's value, the option's default, or null.</summary>
-    public string? Get(string name)
-    {
-        if (settings.TryGetValue(name, out var value))
-            return value;
-        return options.TryGetValue(name, out var option) ? option.DefaultValue : null;
-    }
+    public string? Get(string name) =>
+        settings.TryGetValue(name, out var value) ? value
+        : options.TryGetValue(name, out var option) ? option.DefaultValue
+        : null;
 
     public string GetRequired(string name) =>
         Get(name) ?? throw new ProviderException($"Missing required option '{name}'.");
@@ -68,12 +57,12 @@ public sealed class ProviderContext
         var value = Get(name);
         if (string.IsNullOrEmpty(value))
             return defaultValue;
-        switch (value!.Trim().ToLowerInvariant())
+        return value.Trim().ToLowerInvariant() switch
         {
-            case "1": case "true": case "yes": case "on": return true;
-            case "0": case "false": case "no": case "off": return false;
-            default: throw new ProviderException($"Option '{name}' expects true/false, got '{value}'.");
-        }
+            "1" or "true" or "yes" or "on" => true,
+            "0" or "false" or "no" or "off" => false,
+            _ => throw new ProviderException($"Option '{name}' expects true/false, got '{value}'."),
+        };
     }
 
     public long GetInt64(string name, long defaultValue)
@@ -81,9 +70,9 @@ public sealed class ProviderContext
         var value = Get(name);
         if (string.IsNullOrEmpty(value))
             return defaultValue;
-        if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result))
-            throw new ProviderException($"Option '{name}' expects a whole number, got '{value}'.");
-        return result;
+        return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result)
+            ? result
+            : throw new ProviderException($"Option '{name}' expects a whole number, got '{value}'.");
     }
 
     /// <summary>
@@ -95,13 +84,9 @@ public sealed class ProviderContext
         if (settings.TryGetValue(name, out var direct))
             return direct;
 
-        if (settings.TryGetValue(name + "-env", out var variable))
-        {
-            var fromEnv = Environment.GetEnvironmentVariable(variable);
-            if (fromEnv == null)
-                throw new ProviderException($"Environment variable '{variable}' (from option '{name}-env') is not set.");
-            return fromEnv;
-        }
+        if (settings.TryGetValue(name + EnvSuffix, out var variable))
+            return Environment.GetEnvironmentVariable(variable)
+                ?? throw new ProviderException($"Environment variable '{variable}' (from option '{name}{EnvSuffix}') is not set.");
 
         return Interaction.PromptSecret(prompt, confirm);
     }

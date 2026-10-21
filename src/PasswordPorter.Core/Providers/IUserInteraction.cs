@@ -18,7 +18,7 @@ public interface IUserInteraction
 /// <summary>Never prompts; warnings are discarded.</summary>
 public sealed class NonInteractive : IUserInteraction
 {
-    public static readonly NonInteractive Instance = new NonInteractive();
+    public static readonly NonInteractive Instance = new();
 
     public string? PromptSecret(string prompt, bool confirm) => null;
 

@@ -9,29 +9,29 @@ namespace PasswordPorter.KeePass;
 /// </summary>
 public sealed class KeePassProvider : ICredentialSourceProvider, ICredentialTargetProvider
 {
-    public ProviderInfo Info { get; } = new ProviderInfo(
+    public ProviderInfo Info { get; } = new(
         "keepass", "KeePass (KDBX)", ProviderKind.PasswordManager,
         "KeePass 2.x / KeePassXC database. Reads KDBX 3.1 and 4.x; adds to existing databases or creates KDBX 4 ones.");
 
     public IReadOnlyList<ProviderOption> SourceOptions { get; } =
     [
-        new ProviderOption("file", "The .kdbx file.", IsRequired: true),
-        new ProviderOption("password", "Master password.", IsSecret: true),
-        new ProviderOption("keyfile", "Key file, if the database uses one."),
+        new("file", "The .kdbx file.", IsRequired: true),
+        new("password", "Master password.", IsSecret: true),
+        new("keyfile", "Key file, if the database uses one."),
     ];
 
     public IReadOnlyList<ProviderOption> TargetOptions { get; } =
     [
-        new ProviderOption("file", "The .kdbx file. Created if it does not exist, otherwise added to.", IsRequired: true),
-        new ProviderOption("password", "Master password.", IsSecret: true),
-        new ProviderOption("keyfile", "Key file, if the database uses (or should use) one."),
-        new ProviderOption("group", "Group to put imported entries in ('/' separates levels; empty = top level).", DefaultValue: "Imported"),
-        new ProviderOption("duplicates", "skip: don't add entries whose URL, username and password already exist anywhere in the database; add: add them anyway.", DefaultValue: "skip"),
-        new ProviderOption("backup", "Keep the previous version of an existing database as <file>.bak.", DefaultValue: "true"),
-        new ProviderOption("kdf", "New databases only: argon2id, argon2d or aes.", DefaultValue: "argon2id"),
-        new ProviderOption("kdf-iterations", "New databases only: Argon2 passes (or AES-KDF rounds)."),
-        new ProviderOption("kdf-memory", "New databases only: Argon2 memory in MiB.", DefaultValue: "64"),
-        new ProviderOption("kdf-parallelism", "New databases only: Argon2 parallelism.", DefaultValue: "2"),
+        new("file", "The .kdbx file. Created if it does not exist, otherwise added to.", IsRequired: true),
+        new("password", "Master password.", IsSecret: true),
+        new("keyfile", "Key file, if the database uses (or should use) one."),
+        new("group", "Group to put imported entries in ('/' separates levels; empty = top level).", DefaultValue: "Imported"),
+        new("duplicates", "skip: don't add entries whose URL, username and password already exist anywhere in the database; add: add them anyway.", DefaultValue: "skip"),
+        new("backup", "Keep the previous version of an existing database as <file>.bak.", DefaultValue: "true"),
+        new("kdf", "New databases only: argon2id, argon2d or aes.", DefaultValue: "argon2id"),
+        new("kdf-iterations", "New databases only: Argon2 passes (or AES-KDF rounds)."),
+        new("kdf-memory", "New databases only: Argon2 memory in MiB.", DefaultValue: "64"),
+        new("kdf-parallelism", "New databases only: Argon2 parallelism.", DefaultValue: "2"),
     ];
 
     public ICredentialSource OpenSource(ProviderContext context)
@@ -39,24 +39,26 @@ public sealed class KeePassProvider : ICredentialSourceProvider, ICredentialTarg
         var file = context.GetRequired("file");
         if (!File.Exists(file))
             throw new ProviderException($"File not found: {file}");
-        var key = GetKey(context, file, isNew: false);
-        return new Source(Open(file, key));
+        return new Source(Open(file, GetKey(context, file, isNew: false)));
     }
 
     public ICredentialTarget OpenTarget(ProviderContext context)
     {
         var file = context.GetRequired("file");
-        var duplicates = (context.Get("duplicates") ?? "skip").ToLowerInvariant();
-        if (duplicates != "skip" && duplicates != "add")
-            throw new ProviderException("Option 'duplicates' must be 'skip' or 'add'.");
+        var skipDuplicates = (context.Get("duplicates") ?? "skip").ToLowerInvariant() switch
+        {
+            "skip" => true,
+            "add" => false,
+            _ => throw new ProviderException("Option 'duplicates' must be 'skip' or 'add'."),
+        };
 
         var isNew = !File.Exists(file);
         var kdf = isNew ? GetKdfSettings(context) : null;
         var key = GetKey(context, file, isNew);
         var db = isNew ? KdbxDatabase.Create(Path.GetFileNameWithoutExtension(file), kdf) : Open(file, key);
 
-        var group = (context.Get("group") ?? "").Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-        return new Target(db, file, key, group, duplicates == "skip", context.GetBool("backup", true));
+        var group = (context.Get("group") ?? "").Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return new Target(db, file, key, group, skipDuplicates, context.GetBool("backup", true));
     }
 
     static KdbxDatabase Open(string file, KdbxKey key)
@@ -78,173 +80,144 @@ public sealed class KeePassProvider : ICredentialSourceProvider, ICredentialTarg
     static KdbxKey GetKey(ProviderContext context, string file, bool isNew)
     {
         var keyFile = context.Get("keyfile");
-        if (!string.IsNullOrEmpty(keyFile) && !File.Exists(keyFile))
+        var hasKeyFile = !string.IsNullOrEmpty(keyFile);
+        if (hasKeyFile && !File.Exists(keyFile))
             throw new ProviderException($"Key file not found: {keyFile}");
 
-        var prompt = isNew
-            ? $"New master password for {Path.GetFileName(file)}: "
-            : $"Master password for {Path.GetFileName(file)}: ";
-        var password = context.GetSecret("password", prompt, confirm: isNew);
+        var name = Path.GetFileName(file);
+        var password = context.GetSecret("password", isNew ? $"New master password for {name}: " : $"Master password for {name}: ", confirm: isNew);
 
         // With a key file, an empty password means "key file only", as in KeePass.
-        if (string.IsNullOrEmpty(password) && !string.IsNullOrEmpty(keyFile))
+        if (hasKeyFile && string.IsNullOrEmpty(password))
             password = null;
-        if (password == null && string.IsNullOrEmpty(keyFile))
-            throw new ProviderException("A master password (password=..., password-env=VAR or the prompt) or keyfile=... is required.");
-        if (isNew && password != null && password.Length == 0)
-            throw new ProviderException("Refusing to create a database with an empty master password.");
-        return new KdbxKey(password, keyFile);
+        return (password, hasKeyFile, isNew) switch
+        {
+            (null, false, _) => throw new ProviderException("A master password (password=..., password-env=VAR or the prompt) or keyfile=... is required."),
+            ("", _, true) => throw new ProviderException("Refusing to create a database with an empty master password."),
+            _ => new KdbxKey(password, keyFile),
+        };
     }
 
     static KdbxKdfSettings GetKdfSettings(ProviderContext context)
     {
-        var settings = new KdbxKdfSettings();
-        switch ((context.Get("kdf") ?? "argon2id").ToLowerInvariant())
+        var algorithm = (context.Get("kdf") ?? "argon2id").ToLowerInvariant() switch
         {
-            case "argon2id": settings.Algorithm = KdbxKdfAlgorithm.Argon2id; break;
-            case "argon2d": settings.Algorithm = KdbxKdfAlgorithm.Argon2d; break;
-            case "aes": case "aes-kdf": settings.Algorithm = KdbxKdfAlgorithm.AesKdf; break;
-            default: throw new ProviderException("Option 'kdf' must be argon2id, argon2d or aes.");
-        }
+            "argon2id" => KdbxKdfAlgorithm.Argon2id,
+            "argon2d" => KdbxKdfAlgorithm.Argon2d,
+            "aes" or "aes-kdf" => KdbxKdfAlgorithm.AesKdf,
+            _ => throw new ProviderException("Option 'kdf' must be argon2id, argon2d or aes."),
+        };
 
-        var defaultIterations = settings.Algorithm == KdbxKdfAlgorithm.AesKdf ? 2_000_000L : (long)settings.Iterations;
+        var defaults = new KdbxKdfSettings();
+        var defaultIterations = algorithm == KdbxKdfAlgorithm.AesKdf ? 2_000_000L : (long)defaults.Iterations;
         var iterations = context.GetInt64("kdf-iterations", defaultIterations);
         var memory = context.GetInt64("kdf-memory", 64);
         var parallelism = context.GetInt64("kdf-parallelism", 2);
-        if (iterations < 1 || memory < 1 || memory > 4096 || parallelism < 1 || parallelism > 64)
+        if (iterations < 1 || memory is < 1 or > 4096 || parallelism is < 1 or > 64)
             throw new ProviderException("KDF settings out of range (iterations >= 1, memory 1-4096 MiB, parallelism 1-64).");
 
-        settings.Iterations = (ulong)iterations;
-        settings.MemoryBytes = (ulong)memory * 1024 * 1024;
-        settings.Parallelism = (uint)parallelism;
-        return settings;
+        return new KdbxKdfSettings
+        {
+            Algorithm = algorithm,
+            Iterations = (ulong)iterations,
+            MemoryBytes = (ulong)memory * 1024 * 1024,
+            Parallelism = (uint)parallelism,
+        };
     }
 
-    static readonly HashSet<string> StandardKeys = new HashSet<string>(StringComparer.Ordinal)
-    {
-        KdbxEntry.TitleKey, KdbxEntry.UserNameKey, KdbxEntry.PasswordKey, KdbxEntry.UrlKey, KdbxEntry.NotesKey,
-    };
+    static readonly HashSet<string> StandardKeys =
+        [KdbxEntry.TitleKey, KdbxEntry.UserNameKey, KdbxEntry.PasswordKey, KdbxEntry.UrlKey, KdbxEntry.NotesKey];
+
+    static readonly string[] SecretFieldHints = ["password", "secret", "otp", "pin"];
 
     /// <summary>Custom fields that look secret are stored protected.</summary>
-    static bool ShouldProtect(string fieldName)
-    {
-        var n = fieldName.ToLowerInvariant();
-        return n.Contains("password") || n.Contains("secret") || n.Contains("otp") || n.Contains("pin");
-    }
+    static bool ShouldProtect(string fieldName) =>
+        SecretFieldHints.Any(hint => fieldName.Contains(hint, StringComparison.OrdinalIgnoreCase));
 
-    static string DuplicateKey(string? url, string? user, string? password) =>
-        (url ?? "") + "\u0000" + (user ?? "") + "\u0000" + (password ?? "");
+    /// <summary>An entry and the names of the groups containing it (excluding the root group).</summary>
+    readonly record struct EntryInGroup(KdbxEntry Entry, IReadOnlyList<string> Path);
 
-    /// <summary>All entries outside the recycle bin, with their group path (excluding the root group).</summary>
-    static IEnumerable<KeyValuePair<KdbxEntry, List<string>>> AllEntries(KdbxDatabase db)
+    /// <summary>All entries outside the recycle bin, depth first.</summary>
+    static IEnumerable<EntryInGroup> AllEntries(KdbxDatabase db)
     {
         var recycleBin = db.RecycleBinUuid;
-        var stack = new Stack<KeyValuePair<KdbxGroup, List<string>>>();
-        stack.Push(new KeyValuePair<KdbxGroup, List<string>>(db.RootGroup, new List<string>()));
-        while (stack.Count > 0)
+        var stack = new Stack<(KdbxGroup group, List<string> path)>([(db.RootGroup, [])]);
+        while (stack.TryPop(out var current))
         {
-            var current = stack.Pop();
-            foreach (var entry in current.Key.Entries)
-                yield return new KeyValuePair<KdbxEntry, List<string>>(entry, current.Value);
-            foreach (var child in current.Key.Groups.Reverse())
+            foreach (var entry in current.group.Entries)
+                yield return new(entry, current.path);
+            foreach (var child in current.group.Groups.Reverse())
             {
-                if (recycleBin != null && child.Uuid == recycleBin)
-                    continue;
-                stack.Push(new KeyValuePair<KdbxGroup, List<string>>(child, new List<string>(current.Value) { child.Name }));
+                if (recycleBin is null || child.Uuid != recycleBin)
+                    stack.Push((child, [.. current.path, child.Name]));
             }
         }
     }
 
-    sealed class Source : ICredentialSource
+    sealed class Source(KdbxDatabase db) : ICredentialSource
     {
-        readonly KdbxDatabase db;
+        public IReadOnlyList<Credential> ReadCredentials() => AllEntries(db).Select(ToCredential).ToList();
 
-        public Source(KdbxDatabase db) { this.db = db; }
-
-        public IReadOnlyList<Credential> ReadCredentials()
+        static Credential ToCredential(EntryInGroup item)
         {
-            var result = new List<Credential>();
-            foreach (var pair in AllEntries(db))
+            var entry = item.Entry;
+            var c = new Credential
             {
-                var entry = pair.Key;
-                var c = new Credential
-                {
-                    Title = entry.GetString(KdbxEntry.TitleKey),
-                    Username = entry.GetString(KdbxEntry.UserNameKey),
-                    Password = entry.GetString(KdbxEntry.PasswordKey),
-                    Url = entry.GetString(KdbxEntry.UrlKey),
-                    Notes = entry.GetString(KdbxEntry.NotesKey),
-                    Created = entry.CreationTime,
-                    Modified = entry.LastModificationTime,
-                    LastUsed = entry.LastAccessTime,
-                };
-                foreach (var folder in pair.Value)
-                    c.Folder.Add(folder);
-                foreach (var s in entry.Strings)
-                    if (!StandardKeys.Contains(s.Key) && s.Value.Length > 0)
-                        c.Fields[s.Key] = s.Value;
-                result.Add(c);
+                Title = entry.GetString(KdbxEntry.TitleKey),
+                Username = entry.GetString(KdbxEntry.UserNameKey),
+                Password = entry.GetString(KdbxEntry.PasswordKey),
+                Url = entry.GetString(KdbxEntry.UrlKey),
+                Notes = entry.GetString(KdbxEntry.NotesKey),
+                Created = entry.CreationTime,
+                Modified = entry.LastModificationTime,
+                LastUsed = entry.LastAccessTime,
+            };
+            foreach (var folder in item.Path)
+                c.Folder.Add(folder);
+            foreach (var (name, value) in entry.Strings)
+            {
+                if (!StandardKeys.Contains(name) && value.Length > 0)
+                    c.Fields[name] = value;
             }
-            return result;
+            return c;
         }
 
         public void Dispose() { }
     }
 
-    sealed class Target : ICredentialTarget
+    sealed class Target(KdbxDatabase db, string file, KdbxKey key, string[] groupPath, bool skipDuplicates, bool backup)
+        : ICredentialTarget
     {
-        readonly KdbxDatabase db;
-        readonly string file;
-        readonly KdbxKey key;
-        readonly string[] groupPath;
-        readonly bool skipDuplicates;
-        readonly bool backup;
-
-        public Target(KdbxDatabase db, string file, KdbxKey key, string[] groupPath, bool skipDuplicates, bool backup)
-        {
-            this.db = db;
-            this.file = file;
-            this.key = key;
-            this.groupPath = groupPath;
-            this.skipDuplicates = skipDuplicates;
-            this.backup = backup;
-        }
-
         public WriteResult Write(IReadOnlyList<Credential> credentials)
         {
-            var existing = new HashSet<string>(AllEntries(db).Select(p => DuplicateKey(
-                p.Key.GetString(KdbxEntry.UrlKey), p.Key.GetString(KdbxEntry.UserNameKey), p.Key.GetString(KdbxEntry.PasswordKey))),
-                StringComparer.Ordinal);
+            // Duplicates are matched on URL + username + password, anywhere in the database.
+            var existing = AllEntries(db)
+                .Select(e => (e.Entry.GetString(KdbxEntry.UrlKey), e.Entry.GetString(KdbxEntry.UserNameKey), e.Entry.GetString(KdbxEntry.PasswordKey)))
+                .ToHashSet();
 
             KdbxGroup? baseGroup = null;
+            KdbxGroup BaseGroup() => baseGroup ??= groupPath.Aggregate(db.RootGroup, (g, name) => g.GetOrAddGroup(name));
+
             int added = 0, skipped = 0;
             foreach (var c in credentials)
             {
-                if (skipDuplicates && !existing.Add(DuplicateKey(c.Url, c.Username, c.Password)))
+                if (skipDuplicates && !existing.Add((c.Url, c.Username, c.Password)))
                 {
                     skipped++;
                     continue;
                 }
 
-                if (baseGroup == null)
-                {
-                    baseGroup = db.RootGroup;
-                    foreach (var name in groupPath)
-                        baseGroup = baseGroup.GetOrAddGroup(name);
-                }
-                var group = baseGroup;
-                foreach (var name in c.Folder)
-                    group = group.GetOrAddGroup(name);
-
-                var entry = group.AddEntry();
+                var entry = c.Folder.Aggregate(BaseGroup(), (g, name) => g.GetOrAddGroup(name)).AddEntry();
                 entry.SetString(KdbxEntry.TitleKey, c.DisplayTitle);
                 entry.SetString(KdbxEntry.UserNameKey, c.Username);
                 entry.SetString(KdbxEntry.PasswordKey, c.Password, protect: true);
                 entry.SetString(KdbxEntry.UrlKey, c.Url);
                 entry.SetString(KdbxEntry.NotesKey, c.Notes);
-                foreach (var field in c.Fields)
-                    if (!StandardKeys.Contains(field.Key))
-                        entry.SetString(field.Key, field.Value, ShouldProtect(field.Key));
+                foreach (var (name, value) in c.Fields)
+                {
+                    if (!StandardKeys.Contains(name))
+                        entry.SetString(name, value, ShouldProtect(name));
+                }
                 entry.SetTimes(c.Created, c.Modified ?? c.Created, c.LastUsed);
                 added++;
             }
@@ -255,12 +228,12 @@ public sealed class KeePassProvider : ICredentialSourceProvider, ICredentialTarg
                 {
                     db.Save(file, key, backup);
                 }
-                catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
                     throw new ProviderException($"Could not save '{file}': {e.Message}", e);
                 }
             }
-            return new WriteResult(added, skipped, Path.GetFullPath(file));
+            return new(added, skipped, Path.GetFullPath(file));
         }
 
         public void Dispose() { }

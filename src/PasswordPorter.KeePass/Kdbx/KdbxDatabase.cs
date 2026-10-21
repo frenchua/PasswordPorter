@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.IO.Compression;
-using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
@@ -26,16 +25,19 @@ public sealed class KdbxDatabase
     internal const uint FileVersion40 = 0x00040000;
     const int BlockSize = 1024 * 1024;
 
-    static readonly byte[] EndOfHeader = { 0x0D, 0x0A, 0x0D, 0x0A };
-    static readonly byte[] Salsa20Nonce = { 0xE8, 0x30, 0x09, 0x4B, 0x97, 0x20, 0x5D, 0x2A };
+    static readonly byte[] EndOfHeader = [0x0D, 0x0A, 0x0D, 0x0A];
+    static readonly byte[] Salsa20Nonce = [0xE8, 0x30, 0x09, 0x4B, 0x97, 0x20, 0x5D, 0x2A];
     const uint InnerStreamSalsa20 = 2;
     const uint InnerStreamChaCha20 = 3;
+
+    /// <summary>An attachment from the KDBX 4 inner header.</summary>
+    sealed record Binary(bool Protected, byte[] Data);
 
     byte[] cipherId = KdbxUuids.CipherAes256;
     bool compressed = true;
     VariantDictionary kdfParameters = new KdbxKdfSettings().ToParameters();
     byte[]? publicCustomData;
-    readonly List<Binary> binaries = new List<Binary>();
+    readonly List<Binary> binaries = [];
 
     KdbxDatabase(XDocument document, uint fileVersion)
     {
@@ -56,19 +58,12 @@ public sealed class KdbxDatabase
     XElement Meta => Document.Root?.Element("Meta") ?? throw new KdbxFormatException("The database XML has no Meta element.");
 
     public KdbxGroup RootGroup =>
-        new KdbxGroup(this, Document.Root?.Element("Root")?.Element("Group") ?? throw new KdbxFormatException("The database has no root group."));
+        new(this, Document.Root?.Element("Root")?.Element("Group") ?? throw new KdbxFormatException("The database has no root group."));
 
-    public string? RecycleBinUuid
-    {
-        get
-        {
-            var enabled = Meta.Element("RecycleBinEnabled")?.Value;
-            var uuid = Meta.Element("RecycleBinUUID")?.Value;
-            if (string.Equals(enabled, "False", StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(uuid) || uuid == KdbxGroup.ZeroUuid)
-                return null;
-            return uuid;
-        }
-    }
+    public string? RecycleBinUuid =>
+        Meta.Element("RecycleBinEnabled")?.Value is { } enabled && enabled.Equals("False", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : Meta.Element("RecycleBinUUID")?.Value is { Length: > 0 } uuid && uuid != KdbxGroup.ZeroUuid ? uuid : null;
 
     // ---------------------------------------------------------------- creation
 
@@ -77,24 +72,25 @@ public sealed class KdbxDatabase
     /// <summary>Creates a database in a specific format version (KDBX 3.1 requires AES-KDF). Used by tests.</summary>
     internal static KdbxDatabase Create(string name, KdbxKdfSettings? kdf, uint fileVersion)
     {
-        var now = DateTime.UtcNow;
-        var db = new KdbxDatabase(new XDocument(new XDeclaration("1.0", "utf-8", "yes")), fileVersion);
-        db.kdfParameters = (kdf ?? new KdbxKdfSettings()).ToParameters();
+        var db = new KdbxDatabase(new XDocument(new XDeclaration("1.0", "utf-8", "yes")), fileVersion)
+        {
+            kdfParameters = (kdf ?? new KdbxKdfSettings()).ToParameters(),
+        };
 
-        string T(DateTime t) => db.FormatTime(t);
+        var now = db.FormatTime(DateTime.UtcNow);
         var zero = KdbxGroup.ZeroUuid;
         db.Document.Add(new XElement("KeePassFile",
             new XElement("Meta",
                 new XElement("Generator", "PasswordPorter"),
                 new XElement("DatabaseName", name),
-                new XElement("DatabaseNameChanged", T(now)),
+                new XElement("DatabaseNameChanged", now),
                 new XElement("DatabaseDescription"),
-                new XElement("DatabaseDescriptionChanged", T(now)),
+                new XElement("DatabaseDescriptionChanged", now),
                 new XElement("DefaultUserName"),
-                new XElement("DefaultUserNameChanged", T(now)),
+                new XElement("DefaultUserNameChanged", now),
                 new XElement("MaintenanceHistoryDays", 365),
                 new XElement("Color"),
-                new XElement("MasterKeyChanged", T(now)),
+                new XElement("MasterKeyChanged", now),
                 new XElement("MasterKeyChangeRec", -1),
                 new XElement("MasterKeyChangeForce", -1),
                 new XElement("MemoryProtection",
@@ -105,9 +101,9 @@ public sealed class KdbxDatabase
                     new XElement("ProtectNotes", "False")),
                 new XElement("RecycleBinEnabled", "True"),
                 new XElement("RecycleBinUUID", zero),
-                new XElement("RecycleBinChanged", T(now)),
+                new XElement("RecycleBinChanged", now),
                 new XElement("EntryTemplatesGroup", zero),
-                new XElement("EntryTemplatesGroupChanged", T(now)),
+                new XElement("EntryTemplatesGroupChanged", now),
                 new XElement("HistoryMaxItems", 10),
                 new XElement("HistoryMaxSize", 6291456),
                 new XElement("LastSelectedGroup", zero),
@@ -125,20 +121,23 @@ public sealed class KdbxDatabase
     public static KdbxDatabase Load(byte[] file, KdbxKey key)
     {
         var r = new ByteReader(file);
-        var sig1 = r.ReadUInt32();
-        var sig2 = r.ReadUInt32();
-        if (sig1 == Signature1 && sig2 == Signature2Kdb)
-            throw new KdbxFormatException("This is a KeePass 1.x (.kdb) database, which is not supported. Open it in KeePass 2 and save it as .kdbx.");
-        if (sig1 != Signature1 || sig2 != Signature2)
-            throw new KdbxFormatException("Not a KeePass database.");
+        switch ((r.ReadUInt32(), r.ReadUInt32()))
+        {
+            case (Signature1, Signature2):
+                break;
+            case (Signature1, Signature2Kdb):
+                throw new KdbxFormatException("This is a KeePass 1.x (.kdb) database, which is not supported. Open it in KeePass 2 and save it as .kdbx.");
+            default:
+                throw new KdbxFormatException("Not a KeePass database.");
+        }
 
         var version = r.ReadUInt32();
-        switch (version >> 16)
+        return (version >> 16) switch
         {
-            case 3: return Load3(file, r, version, key);
-            case 4: return Load4(file, r, version, key);
-            default: throw new KdbxFormatException($"Unsupported KDBX version {version >> 16}.{version & 0xFFFF}.");
-        }
+            3 => Load3(file, r, version, key),
+            4 => Load4(file, r, version, key),
+            _ => throw new KdbxFormatException($"Unsupported KDBX version {version >> 16}.{version & 0xFFFF}."),
+        };
     }
 
     static KdbxDatabase Load4(byte[] file, ByteReader r, uint version, KdbxKey key)
@@ -147,41 +146,31 @@ public sealed class KdbxDatabase
         uint compression = 0;
         VariantDictionary? kdf = null;
 
-        while (true)
+        for (var (id, data) = ReadField4(r); id != 0; (id, data) = ReadField4(r))
         {
-            var id = r.ReadByte();
-            var data = r.ReadBytes(r.ReadInt32());
-            if (id == 0) break;
             switch (id)
             {
                 case 2: cipherId = data; break;
-                case 3: compression = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0)); break;
+                case 3: compression = BinaryPrimitives.ReadUInt32LittleEndian(data); break;
                 case 4: masterSeed = data; break;
                 case 7: iv = data; break;
                 case 11: kdf = VariantDictionary.Deserialize(data); break;
                 case 12: publicCustomData = data; break;
             }
         }
-        int headerLength = r.Position;
-        if (cipherId == null || masterSeed == null || iv == null || kdf == null)
+        if (cipherId is null || masterSeed is null || iv is null || kdf is null)
             throw new KdbxFormatException("The database header is incomplete.");
 
-        var header = new byte[headerLength];
-        Buffer.BlockCopy(file, 0, header, 0, headerLength);
+        var header = file[..r.Position];
         if (!CryptographicOperations.FixedTimeEquals(r.ReadBytes(32), CryptoUtil.Sha256(header)))
             throw new KdbxFormatException("The database header is corrupt (checksum mismatch).");
         var headerHmac = r.ReadBytes(32);
 
-        var transformed = KdbxKdf.Transform(kdf, key.GetCompositeHash());
-        var cipherKey = CryptoUtil.Sha256(masterSeed, transformed);
-        var hmacKey = CryptoUtil.Sha512(masterSeed, transformed, new byte[] { 1 });
-        Array.Clear(transformed, 0, transformed.Length);
-
+        var (cipherKey, hmacKey) = DeriveKeys4(kdf, key, masterSeed);
         if (!CryptographicOperations.FixedTimeEquals(headerHmac, CryptoUtil.HmacSha256(BlockHmacKey(ulong.MaxValue, hmacKey), header)))
             throw new KdbxInvalidKeyException();
 
-        var cipherText = ReadHmacBlocks(r, hmacKey);
-        var plain = Decrypt(cipherId, cipherKey, iv, cipherText);
+        var plain = Decrypt(cipherId, cipherKey, iv, ReadHmacBlocks(r, hmacKey));
         if (compression == 1)
             plain = Gunzip(plain);
 
@@ -189,25 +178,18 @@ public sealed class KdbxDatabase
         var ir = new ByteReader(plain);
         uint streamId = 0;
         byte[]? streamKey = null;
-        var binaries = new List<Binary>();
-        while (true)
+        List<Binary> binaries = [];
+        for (var (id, data) = ReadField4(ir); id != 0; (id, data) = ReadField4(ir))
         {
-            var id = ir.ReadByte();
-            var data = ir.ReadBytes(ir.ReadInt32());
-            if (id == 0) break;
-            switch (id)
+            switch (id, data)
             {
-                case 1: streamId = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0)); break;
-                case 2: streamKey = data; break;
-                case 3:
-                    if (data.Length < 1) throw new KdbxFormatException("Invalid attachment in the inner header.");
-                    var content = new byte[data.Length - 1];
-                    Buffer.BlockCopy(data, 1, content, 0, content.Length);
-                    binaries.Add(new Binary((data[0] & 1) != 0, content));
-                    break;
+                case (1, _): streamId = BinaryPrimitives.ReadUInt32LittleEndian(data); break;
+                case (2, _): streamKey = data; break;
+                case (3, [var flags, .. var content]): binaries.Add(new((flags & 1) != 0, content)); break;
+                case (3, _): throw new KdbxFormatException("Invalid attachment in the inner header.");
             }
         }
-        if (streamKey == null)
+        if (streamKey is null)
             throw new KdbxFormatException("The inner header has no stream key.");
 
         var doc = ParseXml(plain, ir.Position);
@@ -229,36 +211,30 @@ public sealed class KdbxDatabase
         ulong rounds = 0;
         uint compression = 0, streamId = 0;
 
-        while (true)
+        for (var (id, data) = ReadField3(r); id != 0; (id, data) = ReadField3(r))
         {
-            var id = r.ReadByte();
-            var data = r.ReadBytes(r.ReadUInt16());
-            if (id == 0) break;
             switch (id)
             {
                 case 2: cipherId = data; break;
-                case 3: compression = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0)); break;
+                case 3: compression = BinaryPrimitives.ReadUInt32LittleEndian(data); break;
                 case 4: masterSeed = data; break;
                 case 5: transformSeed = data; break;
-                case 6: rounds = BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(0)); break;
+                case 6: rounds = BinaryPrimitives.ReadUInt64LittleEndian(data); break;
                 case 7: iv = data; break;
                 case 8: streamKey = data; break;
                 case 9: startBytes = data; break;
-                case 10: streamId = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0)); break;
+                case 10: streamId = BinaryPrimitives.ReadUInt32LittleEndian(data); break;
             }
         }
-        int headerLength = r.Position;
-        if (cipherId == null || masterSeed == null || transformSeed == null || iv == null || streamKey == null || startBytes == null)
+        if (cipherId is null || masterSeed is null || transformSeed is null || iv is null || streamKey is null || startBytes is null)
             throw new KdbxFormatException("The database header is incomplete.");
+        var header = file[..r.Position];
 
         var kdf = new VariantDictionary();
         kdf.SetBytes("$UUID", KdbxUuids.KdfAes);
         kdf.SetUInt64("R", rounds);
         kdf.SetBytes("S", transformSeed);
-
-        var transformed = KdbxKdf.Transform(kdf, key.GetCompositeHash());
-        var cipherKey = CryptoUtil.Sha256(masterSeed, transformed);
-        Array.Clear(transformed, 0, transformed.Length);
+        var cipherKey = DeriveCipherKey3(kdf, key, masterSeed);
 
         byte[] plain;
         try
@@ -276,7 +252,7 @@ public sealed class KdbxDatabase
         if (compression == 1)
             payload = Gunzip(payload);
 
-        var doc = ParseXml(payload, 0);
+        var doc = ParseXml(payload);
         var db = new KdbxDatabase(doc, version)
         {
             cipherId = cipherId,
@@ -284,26 +260,53 @@ public sealed class KdbxDatabase
             kdfParameters = kdf,
         };
 
-        var header = new byte[headerLength];
-        Buffer.BlockCopy(file, 0, header, 0, headerLength);
-        var storedHash = db.Meta.Element("HeaderHash")?.Value;
-        if (!string.IsNullOrEmpty(storedHash) &&
-            !CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(storedHash), CryptoUtil.Sha256(header)))
+        if (db.Meta.Element("HeaderHash")?.Value is { Length: > 0 } storedHash
+            && !CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(storedHash), CryptoUtil.Sha256(header)))
             throw new KdbxFormatException("The database header has been modified or is corrupt (HeaderHash mismatch).");
 
         Unprotect(doc, CreateInnerStream(streamId, streamKey));
         return db;
     }
 
-    static XDocument ParseXml(byte[] data, int offset)
+    static (byte id, byte[] data) ReadField4(ByteReader r) => (r.ReadByte(), r.ReadBytes(r.ReadInt32()));
+
+    static (byte id, byte[] data) ReadField3(ByteReader r) => (r.ReadByte(), r.ReadBytes(r.ReadUInt16()));
+
+    static XDocument ParseXml(byte[] data, int offset = 0)
     {
-        using var ms = new MemoryStream(data, offset, data.Length - offset);
-        var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
-        using var reader = XmlReader.Create(ms, settings);
+        using var stream = new MemoryStream(data, offset, data.Length - offset, writable: false);
+        using var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
         var doc = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
-        if (doc.Root?.Name.LocalName != "KeePassFile")
-            throw new KdbxFormatException("The decrypted content is not a KeePass XML document.");
-        return doc;
+        return doc.Root?.Name.LocalName == "KeePassFile"
+            ? doc
+            : throw new KdbxFormatException("The decrypted content is not a KeePass XML document.");
+    }
+
+    /// <summary>KDBX 4: the payload cipher key and the HMAC base key.</summary>
+    static (byte[] cipherKey, byte[] hmacKey) DeriveKeys4(VariantDictionary kdf, KdbxKey key, byte[] masterSeed)
+    {
+        var transformed = KdbxKdf.Transform(kdf, key.GetCompositeHash());
+        try
+        {
+            return (CryptoUtil.Sha256(masterSeed, transformed), CryptoUtil.Sha512(masterSeed, transformed, [1]));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(transformed);
+        }
+    }
+
+    static byte[] DeriveCipherKey3(VariantDictionary kdf, KdbxKey key, byte[] masterSeed)
+    {
+        var transformed = KdbxKdf.Transform(kdf, key.GetCompositeHash());
+        try
+        {
+            return CryptoUtil.Sha256(masterSeed, transformed);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(transformed);
+        }
     }
 
     // ---------------------------------------------------------------- saving
@@ -327,41 +330,37 @@ public sealed class KdbxDatabase
         }
         finally
         {
-            if (File.Exists(temp))
-                File.Delete(temp);
+            File.Delete(temp);
         }
     }
 
     public byte[] Save(KdbxKey key) => IsKdbx4 ? Save4(key) : Save3(key);
 
+    int IvLength => KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20) ? 12 : 16;
+
     byte[] Save4(KdbxKey key)
     {
         var masterSeed = RandomNumberGenerator.GetBytes(32);
-        var iv = RandomNumberGenerator.GetBytes(KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20) ? 12 : 16);
+        var iv = RandomNumberGenerator.GetBytes(IvLength);
         KdbxKdf.Reseed(kdfParameters);
         var innerKey = RandomNumberGenerator.GetBytes(64);
 
         byte[] header;
         using (var h = new MemoryStream())
         {
-            WriteUInt32(h, Signature1);
-            WriteUInt32(h, Signature2);
-            WriteUInt32(h, FileVersion);
+            WriteHeaderStart(h);
             WriteField4(h, 2, cipherId);
             WriteField4(h, 3, CryptoUtil.UInt32Bytes(compressed ? 1u : 0u));
             WriteField4(h, 4, masterSeed);
             WriteField4(h, 7, iv);
             WriteField4(h, 11, kdfParameters.Serialize());
-            if (publicCustomData != null)
+            if (publicCustomData is not null)
                 WriteField4(h, 12, publicCustomData);
             WriteField4(h, 0, EndOfHeader);
             header = h.ToArray();
         }
 
-        var transformed = KdbxKdf.Transform(kdfParameters, key.GetCompositeHash());
-        var cipherKey = CryptoUtil.Sha256(masterSeed, transformed);
-        var hmacKey = CryptoUtil.Sha512(masterSeed, transformed, new byte[] { 1 });
-        Array.Clear(transformed, 0, transformed.Length);
+        var (cipherKey, hmacKey) = DeriveKeys4(kdfParameters, key, masterSeed);
 
         byte[] plain;
         using (var body = new MemoryStream())
@@ -369,26 +368,19 @@ public sealed class KdbxDatabase
             WriteField4(body, 1, CryptoUtil.UInt32Bytes(InnerStreamChaCha20));
             WriteField4(body, 2, innerKey);
             foreach (var bin in binaries)
-            {
-                var data = new byte[bin.Data.Length + 1];
-                data[0] = (byte)(bin.Protected ? 1 : 0);
-                Buffer.BlockCopy(bin.Data, 0, data, 1, bin.Data.Length);
-                WriteField4(body, 3, data);
-            }
-            WriteField4(body, 0, Array.Empty<byte>());
-            WriteXml(body, CreateInnerStream(InnerStreamChaCha20, innerKey), null);
+                WriteField4(body, 3, [(byte)(bin.Protected ? 1 : 0), .. bin.Data]);
+            WriteField4(body, 0, []);
+            WriteXml(body, CreateInnerStream(InnerStreamChaCha20, innerKey), headerHash: null);
             plain = body.ToArray();
         }
         if (compressed)
             plain = Gzip(plain);
 
-        var cipherText = Encrypt(cipherId, cipherKey, iv, plain);
-
         using var output = new MemoryStream();
-        output.Write(header, 0, header.Length);
-        output.Write(CryptoUtil.Sha256(header), 0, 32);
-        output.Write(CryptoUtil.HmacSha256(BlockHmacKey(ulong.MaxValue, hmacKey), header), 0, 32);
-        WriteHmacBlocks(output, cipherText, hmacKey);
+        output.Write(header);
+        output.Write(CryptoUtil.Sha256(header));
+        output.Write(CryptoUtil.HmacSha256(BlockHmacKey(ulong.MaxValue, hmacKey), header));
+        WriteHmacBlocks(output, Encrypt(cipherId, cipherKey, iv, plain), hmacKey);
         return output.ToArray();
     }
 
@@ -398,7 +390,7 @@ public sealed class KdbxDatabase
             throw new InvalidOperationException("KDBX 3.1 databases must use AES-KDF.");
 
         var masterSeed = RandomNumberGenerator.GetBytes(32);
-        var iv = RandomNumberGenerator.GetBytes(KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20) ? 12 : 16);
+        var iv = RandomNumberGenerator.GetBytes(IvLength);
         KdbxKdf.Reseed(kdfParameters);
         var streamKey = RandomNumberGenerator.GetBytes(32);
         var startBytes = RandomNumberGenerator.GetBytes(32);
@@ -406,9 +398,7 @@ public sealed class KdbxDatabase
         byte[] header;
         using (var h = new MemoryStream())
         {
-            WriteUInt32(h, Signature1);
-            WriteUInt32(h, Signature2);
-            WriteUInt32(h, FileVersion);
+            WriteHeaderStart(h);
             WriteField3(h, 2, cipherId);
             WriteField3(h, 3, CryptoUtil.UInt32Bytes(compressed ? 1u : 0u));
             WriteField3(h, 4, masterSeed);
@@ -422,9 +412,7 @@ public sealed class KdbxDatabase
             header = h.ToArray();
         }
 
-        var transformed = KdbxKdf.Transform(kdfParameters, key.GetCompositeHash());
-        var cipherKey = CryptoUtil.Sha256(masterSeed, transformed);
-        Array.Clear(transformed, 0, transformed.Length);
+        var cipherKey = DeriveCipherKey3(kdfParameters, key, masterSeed);
 
         byte[] xml;
         using (var ms = new MemoryStream())
@@ -438,16 +426,19 @@ public sealed class KdbxDatabase
         byte[] plain;
         using (var ms = new MemoryStream())
         {
-            ms.Write(startBytes, 0, startBytes.Length);
+            ms.Write(startBytes);
             WriteHashedBlocks(ms, xml);
             plain = ms.ToArray();
         }
 
-        var cipherText = Encrypt(cipherId, cipherKey, iv, plain);
-        var output = new byte[header.Length + cipherText.Length];
-        Buffer.BlockCopy(header, 0, output, 0, header.Length);
-        Buffer.BlockCopy(cipherText, 0, output, header.Length, cipherText.Length);
-        return output;
+        return [.. header, .. Encrypt(cipherId, cipherKey, iv, plain)];
+    }
+
+    void WriteHeaderStart(Stream s)
+    {
+        s.Write(CryptoUtil.UInt32Bytes(Signature1));
+        s.Write(CryptoUtil.UInt32Bytes(Signature2));
+        s.Write(CryptoUtil.UInt32Bytes(FileVersion));
     }
 
     /// <summary>Serialises a protected copy of the document. KDBX 3 also gets the header hash.</summary>
@@ -456,17 +447,16 @@ public sealed class KdbxDatabase
         var copy = new XDocument(Document);
         var meta = copy.Root!.Element("Meta")!;
         meta.Element("HeaderHash")?.Remove();
-        if (headerHash != null)
+        if (headerHash is not null)
         {
-            var generator = meta.Element("Generator");
             var element = new XElement("HeaderHash", headerHash);
-            if (generator != null) generator.AddAfterSelf(element);
+            if (meta.Element("Generator") is { } generator) generator.AddAfterSelf(element);
             else meta.AddFirst(element);
         }
 
         Protect(copy, innerStream);
 
-        var settings = new XmlWriterSettings
+        using var writer = XmlWriter.Create(output, new XmlWriterSettings
         {
             Encoding = new UTF8Encoding(false),
             Indent = true,
@@ -474,8 +464,7 @@ public sealed class KdbxDatabase
             NewLineChars = "\n",
             NewLineHandling = NewLineHandling.Entitize, // keep \r in notes intact
             CloseOutput = false,
-        };
-        using var writer = XmlWriter.Create(output, settings);
+        });
         copy.Save(writer);
     }
 
@@ -484,7 +473,7 @@ public sealed class KdbxDatabase
     static bool IsProtected(XElement e) =>
         string.Equals((string?)e.Attribute("Protected"), "True", StringComparison.OrdinalIgnoreCase);
 
-    static bool IsStringValue(XElement e) => e.Name.LocalName == "Value" && e.Parent?.Name.LocalName == "String";
+    static bool IsStringValue(XElement e) => e is { Name.LocalName: "Value", Parent.Name.LocalName: "String" };
 
     /// <summary>Decrypts every Protected="True" value in document order (the order the inner stream was applied).</summary>
     static void Unprotect(XDocument doc, StreamCipher stream)
@@ -494,7 +483,7 @@ public sealed class KdbxDatabase
             var data = Convert.FromBase64String(e.Value.Trim());
             stream.Transform(data);
             e.Value = IsStringValue(e) ? Encoding.UTF8.GetString(data) : Convert.ToBase64String(data);
-            Array.Clear(data, 0, data.Length);
+            CryptographicOperations.ZeroMemory(data);
         }
     }
 
@@ -508,55 +497,39 @@ public sealed class KdbxDatabase
         }
     }
 
-    static StreamCipher CreateInnerStream(uint id, byte[] key)
+    static StreamCipher CreateInnerStream(uint id, byte[] key) => id switch
     {
-        switch (id)
-        {
-            case InnerStreamSalsa20:
-                return new Salsa20(CryptoUtil.Sha256(key), Salsa20Nonce);
-            case InnerStreamChaCha20:
-                var h = CryptoUtil.Sha512(key);
-                var k = new byte[32];
-                var n = new byte[12];
-                Buffer.BlockCopy(h, 0, k, 0, 32);
-                Buffer.BlockCopy(h, 32, n, 0, 12);
-                return new ChaCha20(k, n);
-            default:
-                throw new KdbxFormatException($"Unsupported inner random stream ({id}).");
-        }
-    }
+        InnerStreamSalsa20 => new Salsa20(CryptoUtil.Sha256(key), Salsa20Nonce),
+        InnerStreamChaCha20 when CryptoUtil.Sha512(key) is var h => new ChaCha20(h.AsSpan(0, 32), h.AsSpan(32, 12)),
+        _ => throw new KdbxFormatException($"Unsupported inner random stream ({id})."),
+    };
 
     // ---------------------------------------------------------------- times
-
 
     /// <summary>KDBX 4 stores times as base64 seconds since 0001-01-01; KDBX 3 as ISO 8601.</summary>
     internal string FormatTime(DateTime time)
     {
         var utc = time.Kind == DateTimeKind.Local ? time.ToUniversalTime() : DateTime.SpecifyKind(time, DateTimeKind.Utc);
-        if (IsKdbx4)
-            return Convert.ToBase64String(CryptoUtil.UInt64Bytes((ulong)(utc.Ticks / TimeSpan.TicksPerSecond)));
-        return utc.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+        return IsKdbx4
+            ? Convert.ToBase64String(CryptoUtil.UInt64Bytes((ulong)(utc.Ticks / TimeSpan.TicksPerSecond)))
+            : utc.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
     }
 
     internal static DateTime? ParseTime(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return null;
-        text = text!.Trim();
+        text = text.Trim();
         try
         {
-            if (text.IndexOf(':') < 0)
-            {
-                var bytes = Convert.FromBase64String(text);
-                if (bytes.Length == 8)
-                {
-                    var seconds = (long)BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(0));
-                    if (seconds >= 0 && seconds <= DateTime.MaxValue.Ticks / TimeSpan.TicksPerSecond)
-                        return new DateTime(seconds * TimeSpan.TicksPerSecond, DateTimeKind.Utc);
-                }
-                return null;
-            }
-            return DateTime.Parse(text, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+            if (text.Contains(':'))
+                return DateTime.Parse(text, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+
+            return Convert.FromBase64String(text) is { Length: 8 } bytes
+                   && BinaryPrimitives.ReadInt64LittleEndian(bytes) is var seconds and >= 0
+                   && seconds <= DateTime.MaxValue.Ticks / TimeSpan.TicksPerSecond
+                ? new DateTime(seconds * TimeSpan.TicksPerSecond, DateTimeKind.Utc)
+                : null;
         }
         catch (FormatException)
         {
@@ -568,42 +541,31 @@ public sealed class KdbxDatabase
 
     static byte[] BlockHmacKey(ulong index, byte[] hmacKey) => CryptoUtil.Sha512(CryptoUtil.UInt64Bytes(index), hmacKey);
 
+    static byte[] BlockHmac(ulong index, byte[] hmacKey, byte[] block) =>
+        CryptoUtil.HmacSha256(BlockHmacKey(index, hmacKey), CryptoUtil.UInt64Bytes(index), CryptoUtil.UInt32Bytes((uint)block.Length), block);
+
     static byte[] ReadHmacBlocks(ByteReader r, byte[] hmacKey)
     {
         using var ms = new MemoryStream();
         for (ulong index = 0; ; index++)
         {
             var mac = r.ReadBytes(32);
-            var size = r.ReadInt32();
-            var data = r.ReadBytes(size);
-            var expected = CryptoUtil.HmacSha256(BlockHmacKey(index, hmacKey),
-                CryptoUtil.UInt64Bytes(index), CryptoUtil.UInt32Bytes((uint)size), data);
-            if (!CryptographicOperations.FixedTimeEquals(mac, expected))
+            var block = r.ReadBytes(r.ReadInt32());
+            if (!CryptographicOperations.FixedTimeEquals(mac, BlockHmac(index, hmacKey, block)))
                 throw new KdbxFormatException("The database is corrupt (block authentication failed).");
-            if (size == 0)
+            if (block is [])
                 return ms.ToArray();
-            ms.Write(data, 0, size);
+            ms.Write(block);
         }
     }
 
     static void WriteHmacBlocks(Stream output, byte[] data, byte[] hmacKey)
     {
-        ulong index = 0;
-        int offset = 0;
-        while (true)
+        foreach (var (index, block) in Blocks(data))
         {
-            int size = Math.Min(BlockSize, data.Length - offset);
-            var block = new byte[size];
-            Buffer.BlockCopy(data, offset, block, 0, size);
-            var mac = CryptoUtil.HmacSha256(BlockHmacKey(index, hmacKey),
-                CryptoUtil.UInt64Bytes(index), CryptoUtil.UInt32Bytes((uint)size), block);
-            output.Write(mac, 0, 32);
-            output.Write(CryptoUtil.UInt32Bytes((uint)size), 0, 4);
-            output.Write(block, 0, size);
-            if (size == 0)
-                return;
-            offset += size;
-            index++;
+            output.Write(BlockHmac(index, hmacKey, block));
+            output.Write(CryptoUtil.UInt32Bytes((uint)block.Length));
+            output.Write(block);
         }
     }
 
@@ -619,51 +581,47 @@ public sealed class KdbxDatabase
             var size = r.ReadInt32();
             if (size == 0)
             {
-                if (hash.Any(b => b != 0))
-                    throw new KdbxFormatException("The database is corrupt (final block hash).");
-                return ms.ToArray();
+                return hash.AsSpan().ContainsAnyExcept((byte)0)
+                    ? throw new KdbxFormatException("The database is corrupt (final block hash).")
+                    : ms.ToArray();
             }
             var block = r.ReadBytes(size);
             if (!CryptographicOperations.FixedTimeEquals(hash, CryptoUtil.Sha256(block)))
                 throw new KdbxFormatException("The database is corrupt (block hash mismatch).");
-            ms.Write(block, 0, size);
+            ms.Write(block);
         }
     }
 
     static void WriteHashedBlocks(Stream output, byte[] data)
     {
-        uint index = 0;
-        int offset = 0;
-        while (true)
+        foreach (var (index, block) in Blocks(data))
         {
-            int size = Math.Min(BlockSize, data.Length - offset);
-            var block = new byte[size];
-            Buffer.BlockCopy(data, offset, block, 0, size);
-            output.Write(CryptoUtil.UInt32Bytes(index), 0, 4);
-            output.Write(size == 0 ? new byte[32] : CryptoUtil.Sha256(block), 0, 32);
-            output.Write(CryptoUtil.UInt32Bytes((uint)size), 0, 4);
-            output.Write(block, 0, size);
-            if (size == 0)
-                return;
-            offset += size;
-            index++;
+            output.Write(CryptoUtil.UInt32Bytes((uint)index));
+            output.Write(block is [] ? new byte[32] : CryptoUtil.Sha256(block));
+            output.Write(CryptoUtil.UInt32Bytes((uint)block.Length));
+            output.Write(block);
         }
+    }
+
+    /// <summary>Splits data into numbered blocks of up to <see cref="BlockSize"/>, followed by an empty terminator block.</summary>
+    static IEnumerable<(ulong index, byte[] block)> Blocks(byte[] data)
+    {
+        ulong index = 0;
+        foreach (var chunk in data.Chunk(BlockSize))
+            yield return (index++, chunk);
+        yield return (index, []);
     }
 
     static byte[] Decrypt(byte[] cipherId, byte[] key, byte[] iv, byte[] data)
     {
         if (KdbxUuids.Equal(cipherId, KdbxUuids.CipherAes256))
         {
-            using var aes = CreateAes(key, iv);
-            using var d = aes.CreateDecryptor();
-            return d.TransformFinalBlock(data, 0, data.Length);
+            using var aes = Aes.Create();
+            aes.Key = key;
+            return aes.DecryptCbc(data, iv, PaddingMode.PKCS7);
         }
         if (KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20))
-        {
-            var copy = (byte[])data.Clone();
-            new ChaCha20(key, iv).Transform(copy);
-            return copy;
-        }
+            return ChaCha20Transform(key, iv, data);
         if (KdbxUuids.Equal(cipherId, KdbxUuids.CipherTwofish))
             throw new KdbxFormatException("Databases encrypted with Twofish are not supported. Switch the cipher to AES or ChaCha20 in KeePass.");
         throw new KdbxFormatException("Unknown database cipher.");
@@ -673,34 +631,27 @@ public sealed class KdbxDatabase
     {
         if (KdbxUuids.Equal(cipherId, KdbxUuids.CipherAes256))
         {
-            using var aes = CreateAes(key, iv);
-            using var e = aes.CreateEncryptor();
-            return e.TransformFinalBlock(data, 0, data.Length);
+            using var aes = Aes.Create();
+            aes.Key = key;
+            return aes.EncryptCbc(data, iv, PaddingMode.PKCS7);
         }
         if (KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20))
-        {
-            var copy = (byte[])data.Clone();
-            new ChaCha20(key, iv).Transform(copy);
-            return copy;
-        }
+            return ChaCha20Transform(key, iv, data);
         throw new KdbxFormatException("Saving with this database's cipher is not supported.");
     }
 
-    static Aes CreateAes(byte[] key, byte[] iv)
+    static byte[] ChaCha20Transform(byte[] key, byte[] iv, byte[] data)
     {
-        var aes = Aes.Create();
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.PKCS7;
-        aes.Key = key;
-        aes.IV = iv;
-        return aes;
+        var copy = (byte[])data.Clone();
+        new ChaCha20(key, iv).Transform(copy);
+        return copy;
     }
 
     static byte[] Gzip(byte[] data)
     {
         using var ms = new MemoryStream();
         using (var gz = new GZipStream(ms, CompressionMode.Compress, leaveOpen: true))
-            gz.Write(data, 0, data.Length);
+            gz.Write(data);
         return ms.ToArray();
     }
 
@@ -708,8 +659,7 @@ public sealed class KdbxDatabase
     {
         try
         {
-            using var input = new MemoryStream(data);
-            using var gz = new GZipStream(input, CompressionMode.Decompress);
+            using var gz = new GZipStream(new MemoryStream(data), CompressionMode.Decompress);
             using var output = new MemoryStream();
             gz.CopyTo(output);
             return output.ToArray();
@@ -720,32 +670,17 @@ public sealed class KdbxDatabase
         }
     }
 
-    static void WriteUInt32(Stream s, uint v) => s.Write(CryptoUtil.UInt32Bytes(v), 0, 4);
-
     static void WriteField4(Stream s, byte id, byte[] data)
     {
         s.WriteByte(id);
-        WriteUInt32(s, (uint)data.Length);
-        s.Write(data, 0, data.Length);
+        s.Write(CryptoUtil.UInt32Bytes((uint)data.Length));
+        s.Write(data);
     }
 
     static void WriteField3(Stream s, byte id, byte[] data)
     {
         s.WriteByte(id);
-        s.WriteByte((byte)data.Length);
-        s.WriteByte((byte)(data.Length >> 8));
-        s.Write(data, 0, data.Length);
-    }
-
-    sealed class Binary
-    {
-        public Binary(bool isProtected, byte[] data)
-        {
-            Protected = isProtected;
-            Data = data;
-        }
-
-        public bool Protected { get; }
-        public byte[] Data { get; }
+        s.Write(CryptoUtil.UInt32Bytes((uint)data.Length).AsSpan(0, 2));
+        s.Write(data);
     }
 }

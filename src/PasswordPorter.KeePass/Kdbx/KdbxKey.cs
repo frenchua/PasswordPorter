@@ -11,20 +11,20 @@ namespace PasswordPorter.KeePass.Kdbx;
 /// </summary>
 public sealed class KdbxKey
 {
-    readonly List<byte[]> components = new List<byte[]>();
+    readonly List<byte[]> components = [];
 
     public KdbxKey(string? password, string? keyFilePath = null)
     {
-        if (password != null)
+        if (password is not null)
             components.Add(CryptoUtil.Sha256(Encoding.UTF8.GetBytes(password)));
         if (!string.IsNullOrEmpty(keyFilePath))
-            components.Add(LoadKeyFile(keyFilePath!));
-        if (components.Count == 0)
+            components.Add(LoadKeyFile(keyFilePath));
+        if (components is [])
             throw new ArgumentException("A master key needs a password, a key file, or both.");
     }
 
     /// <summary>SHA-256 over the concatenated component hashes (the input to the KDF).</summary>
-    internal byte[] GetCompositeHash() => CryptoUtil.Sha256(components.ToArray());
+    internal byte[] GetCompositeHash() => CryptoUtil.Sha256([.. components]);
 
     /// <summary>Reads a key file in any format KeePass accepts (XML v1/v2, 32 raw bytes, 64 hex chars, or any file).</summary>
     internal static byte[] LoadKeyFile(string path)
@@ -33,18 +33,12 @@ public sealed class KdbxKey
         return TryLoadXmlKeyFile(data) ?? LoadBinaryKeyFile(data);
     }
 
-    static byte[] LoadBinaryKeyFile(byte[] data)
+    static byte[] LoadBinaryKeyFile(byte[] data) => data switch
     {
-        if (data.Length == 32)
-            return data;
-        if (data.Length == 64)
-        {
-            var text = Encoding.ASCII.GetString(data);
-            if (text.All(Uri.IsHexDigit))
-                return Convert.FromHexString(text);
-        }
-        return CryptoUtil.Sha256(data);
-    }
+        { Length: 32 } => data,
+        { Length: 64 } when Encoding.ASCII.GetString(data) is var text && text.All(char.IsAsciiHexDigit) => Convert.FromHexString(text),
+        _ => CryptoUtil.Sha256(data),
+    };
 
     static byte[]? TryLoadXmlKeyFile(byte[] data)
     {
@@ -59,25 +53,15 @@ public sealed class KdbxKey
             return null;
         }
 
-        var root = doc.Root;
-        if (root == null || root.Name.LocalName != "KeyFile")
-            return null;
-        var version = root.Element("Meta")?.Element("Version")?.Value.Trim();
-        var dataElement = root.Element("Key")?.Element("Data");
-        if (dataElement == null)
+        if (doc.Root is not { Name.LocalName: "KeyFile" } root || root.Element("Key")?.Element("Data") is not { } dataElement)
             return null;
 
-        if (version != null && version.StartsWith("2."))
+        if (root.Element("Meta")?.Element("Version")?.Value.Trim() is { } version && version.StartsWith("2."))
         {
-            var hex = new string(dataElement.Value.Where(c => !char.IsWhiteSpace(c)).ToArray());
-            var key = Convert.FromHexString(hex);
-            var expected = dataElement.Attribute("Hash")?.Value;
-            if (expected != null)
-            {
-                var actual = CryptoUtil.Sha256(key)[..4];
-                if (!CryptographicOperations.FixedTimeEquals(actual, Convert.FromHexString(expected.Trim())))
-                    throw new KdbxFormatException("The key file's checksum does not match; the file is corrupt.");
-            }
+            var key = Convert.FromHexString(string.Concat(dataElement.Value.Where(c => !char.IsWhiteSpace(c))));
+            if (dataElement.Attribute("Hash")?.Value is { } expected
+                && !CryptographicOperations.FixedTimeEquals(CryptoUtil.Sha256(key).AsSpan(0, 4), Convert.FromHexString(expected.Trim())))
+                throw new KdbxFormatException("The key file's checksum does not match; the file is corrupt.");
             return key;
         }
 
@@ -89,14 +73,13 @@ public sealed class KdbxKey
     public static void CreateKeyFile(string path)
     {
         var key = RandomNumberGenerator.GetBytes(32);
-        var hex = Convert.ToHexString(key);
-        var grouped = string.Join(" ", Enumerable.Range(0, 8).Select(i => hex.Substring(i * 8, 8)));
+        var grouped = string.Join(" ", Convert.ToHexString(key).Chunk(8).Select(chunk => new string(chunk)));
         var hash = Convert.ToHexString(CryptoUtil.Sha256(key), 0, 4);
-        var doc = new XDocument(
+        new XDocument(
             new XDeclaration("1.0", "utf-8", null),
             new XElement("KeyFile",
                 new XElement("Meta", new XElement("Version", "2.0")),
-                new XElement("Key", new XElement("Data", new XAttribute("Hash", hash), grouped))));
-        doc.Save(path);
+                new XElement("Key", new XElement("Data", new XAttribute("Hash", hash), grouped))))
+            .Save(path);
     }
 }

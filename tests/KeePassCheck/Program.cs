@@ -56,7 +56,7 @@ internal static class Program
     {
         var key = new CompositeKey();
         key.AddUserKey(new KcpPassword(password));
-        if (keyFile != null)
+        if (keyFile is not null)
             key.AddUserKey(new KcpKeyFile(keyFile));
         return key;
     }
@@ -115,7 +115,7 @@ internal static class Program
                 first = false;
 
                 var groups = new System.Collections.Generic.List<string>();
-                for (var g = entry.ParentGroup; g != null && g != db.RootGroup; g = g.ParentGroup)
+                for (var g = entry.ParentGroup; g is not null && g != db.RootGroup; g = g.ParentGroup)
                     groups.Insert(0, g.Name);
 
                 json.Append("{\"group\":").Append(Str(string.Join("/", groups)));

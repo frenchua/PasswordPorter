@@ -22,81 +22,81 @@ internal static class Program
         try
         {
             var cmd = CommandLine.Parse(args);
-            switch (cmd.Command)
+            return cmd.Command switch
             {
-                case null:
-                case "help":
-                    PrintUsage(registry);
-                    return ExitOk;
-                case "version":
-                    Console.WriteLine(typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
-                    return ExitOk;
-                case "providers":
-                    return Providers(registry, cmd);
-                case "profiles":
-                    return Profiles(registry, cmd);
-                case "list":
-                    return List(registry, cmd);
-                case "export":
-                    return Export(registry, cmd);
-                default:
-                    throw new UsageException($"Unknown command '{cmd.Command}'.");
-            }
+                null or "help" => PrintUsage(registry),
+                "version" => PrintVersion(),
+                "providers" => Providers(registry, cmd),
+                "profiles" => Profiles(registry, cmd),
+                "list" => List(registry, cmd),
+                "export" => Export(registry, cmd),
+                _ => throw new UsageException($"Unknown command '{cmd.Command}'."),
+            };
         }
         catch (UsageException e)
         {
-            Console.Error.WriteLine("error: " + e.Message);
+            Console.Error.WriteLine($"error: {e.Message}");
             Console.Error.WriteLine("Run 'pwport help' for usage.");
             return ExitUsage;
         }
         catch (ProviderException e)
         {
-            Console.Error.WriteLine("error: " + e.Message);
+            Console.Error.WriteLine($"error: {e.Message}");
             return ExitError;
         }
     }
 
-    static void PrintUsage(ProviderRegistry registry)
+    static int PrintUsage(ProviderRegistry registry)
     {
-        Console.WriteLine(
-@"pwport - move saved passwords between browsers and password managers
+        Console.WriteLine("""
+            pwport - move saved passwords between browsers and password managers
 
-Usage:
-  pwport providers [<provider>]          List providers, or show one provider's options
-  pwport profiles <provider>             List the profiles a provider can find on this machine
-  pwport list <source> [-i k=v]...       Show credentials (passwords hidden unless --show-passwords)
-  pwport export <source> <target> [-i k=v]... [-o k=v]... [--dry-run]
-                                         Copy credentials from <source> into <target>
+            Usage:
+              pwport providers [<provider>]          List providers, or show one provider's options
+              pwport profiles <provider>             List the profiles a provider can find on this machine
+              pwport list <source> [-i k=v]...       Show credentials (passwords hidden unless --show-passwords)
+              pwport export <source> <target> [-i k=v]... [-o k=v]... [--dry-run]
+                                                     Copy credentials from <source> into <target>
 
-Options:
-  -i, --in key=value     Option for the source provider (repeatable)
-  -o, --out key=value    Option for the target provider (repeatable)
-  --show-passwords       'list' only: print passwords in clear text
-  --dry-run              'export' only: read the source and report, but write nothing
+            Options:
+              -i, --in key=value     Option for the source provider (repeatable)
+              -o, --out key=value    Option for the target provider (repeatable)
+              --show-passwords       'list' only: print passwords in clear text
+              --dry-run              'export' only: read the source and report, but write nothing
 
-Secrets (master passwords) are prompted for. To script, use <name>-env=VARIABLE to read one
-from an environment variable; passing password=... works but ends up in shell history.
+            Secrets (master passwords) are prompted for. To script, use <name>-env=VARIABLE to read one
+            from an environment variable; passing password=... works but ends up in shell history.
 
-Examples:
-  pwport profiles firefox
-  pwport export firefox keepass -o file=Passwords.kdbx
-  pwport export firefox keepass -i profile=default-release -o file=Passwords.kdbx -o group=Browsers/Firefox
-  pwport export keepass csv -i file=Passwords.kdbx -o file=-
-");
-        Console.WriteLine("Providers: " + string.Join(", ", registry.Providers.Select(p => p.Info.Id)));
+            Examples:
+              pwport profiles firefox
+              pwport export firefox keepass -o file=Passwords.kdbx
+              pwport export firefox keepass -i profile=default-release -o file=Passwords.kdbx -o group=Browsers/Firefox
+              pwport export keepass csv -i file=Passwords.kdbx -o file=-
+
+            """);
+        Console.WriteLine($"Providers: {string.Join(", ", registry.Providers.Select(p => p.Info.Id))}");
+        return ExitOk;
+    }
+
+    static int PrintVersion()
+    {
+        Console.WriteLine(typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
+        return ExitOk;
     }
 
     static int Providers(ProviderRegistry registry, CommandLine cmd)
     {
-        if (cmd.Positionals.Count == 0)
+        if (cmd.Positionals is [])
         {
             foreach (var p in registry.Providers)
             {
-                var caps = new List<string>();
-                if (p is ICredentialSourceProvider) caps.Add("read");
-                if (p is ICredentialTargetProvider) caps.Add("write");
-                if (p is IProfileDiscovery) caps.Add("profiles");
-                Console.WriteLine($"{p.Info.Id,-10} {p.Info.DisplayName,-18} [{string.Join(", ", caps)}]");
+                string?[] caps =
+                [
+                    p is ICredentialSourceProvider ? "read" : null,
+                    p is ICredentialTargetProvider ? "write" : null,
+                    p is IProfileDiscovery ? "profiles" : null,
+                ];
+                Console.WriteLine($"{p.Info.Id,-10} {p.Info.DisplayName,-18} [{string.Join(", ", caps.OfType<string>())}]");
                 Console.WriteLine($"{"",-10} {p.Info.Description}");
             }
             return ExitOk;
@@ -118,23 +118,25 @@ Examples:
         Console.WriteLine(heading);
         foreach (var o in options)
         {
-            var notes = new List<string>();
-            if (o.IsRequired) notes.Add("required");
-            if (o.IsSecret) notes.Add($"secret, prompted; or {o.Name}-env=VAR");
-            if (o.DefaultValue != null) notes.Add("default: " + o.DefaultValue);
+            string?[] notes =
+            [
+                o.IsRequired ? "required" : null,
+                o.IsSecret ? $"secret, prompted; or {o.Name}-env=VAR" : null,
+                o.DefaultValue is { } d ? $"default: {d}" : null,
+            ];
             Console.WriteLine($"  {o.Name,-16} {o.Description}");
-            if (notes.Count > 0)
-                Console.WriteLine($"  {"",-16} ({string.Join("; ", notes)})");
+            if (notes.Any(n => n is not null))
+                Console.WriteLine($"  {"",-16} ({string.Join("; ", notes.OfType<string>())})");
         }
     }
 
     static int Profiles(ProviderRegistry registry, CommandLine cmd)
     {
         var provider = registry.Get(cmd.RequirePositional(0, "provider"));
-        if (!(provider is IProfileDiscovery discovery))
+        if (provider is not IProfileDiscovery discovery)
             throw new ProviderException($"'{provider.Info.Id}' does not have discoverable profiles.");
         var profiles = discovery.DiscoverProfiles();
-        if (profiles.Count == 0)
+        if (profiles is [])
             Console.WriteLine("No profiles found.");
         foreach (var p in profiles)
             Console.WriteLine($"{(p.IsDefault ? "*" : " ")} {p.Name,-24} {p.Path}");
@@ -144,14 +146,14 @@ Examples:
     static int List(ProviderRegistry registry, CommandLine cmd)
     {
         var credentials = ReadSource(registry, cmd.RequirePositional(0, "source"), cmd.InOptions);
-        var rows = credentials.Select(c => new[]
-        {
-            Truncate(c.Folder.Count > 0 ? string.Join("/", c.Folder) + "/" + c.DisplayTitle : c.DisplayTitle, 40),
+        var rows = credentials.Select(string[] (c) =>
+        [
+            Truncate(c.Folder.Count > 0 ? $"{string.Join("/", c.Folder)}/{c.DisplayTitle}" : c.DisplayTitle, 40),
             Truncate(c.Username ?? "", 30),
             Truncate(c.Url ?? "", 50),
-            cmd.ShowPasswords ? c.Password ?? "" : (string.IsNullOrEmpty(c.Password) ? "" : "********"),
-        }).ToList();
-        PrintTable(new[] { "TITLE", "USERNAME", "URL", "PASSWORD" }, rows);
+            cmd.ShowPasswords ? c.Password ?? "" : string.IsNullOrEmpty(c.Password) ? "" : "********",
+        ]).ToList();
+        PrintTable(["TITLE", "USERNAME", "URL", "PASSWORD"], rows);
         Console.Error.WriteLine($"{credentials.Count} credential(s).");
         return ExitOk;
     }
@@ -160,11 +162,10 @@ Examples:
     {
         var sourceId = cmd.RequirePositional(0, "source");
         var targetId = cmd.RequirePositional(1, "target");
-        if (!(registry.Get(targetId) is ICredentialTargetProvider targetProvider))
+        if (registry.Get(targetId) is not ICredentialTargetProvider targetProvider)
             throw new ProviderException($"'{targetId}' cannot be written to.");
         // Validate target options before prompting for anything.
-        var interaction = new ConsoleInteraction();
-        new ProviderContext(targetProvider.TargetOptions, cmd.OutOptions, NonInteractive.Instance);
+        _ = new ProviderContext(targetProvider.TargetOptions, cmd.OutOptions, NonInteractive.Instance);
 
         var credentials = ReadSource(registry, sourceId, cmd.InOptions);
         Console.Error.WriteLine($"Read {credentials.Count} credential(s) from {sourceId}.");
@@ -174,27 +175,26 @@ Examples:
             return ExitOk;
         }
 
-        using var target = targetProvider.OpenTarget(new ProviderContext(targetProvider.TargetOptions, cmd.OutOptions, interaction));
+        using var target = targetProvider.OpenTarget(new ProviderContext(targetProvider.TargetOptions, cmd.OutOptions, new ConsoleInteraction()));
         var result = target.Write(credentials);
-        Console.Error.WriteLine($"Added {result.Added}, skipped {result.Skipped} (already present)" +
-            (result.Location != null ? $" -> {result.Location}" : "") + ".");
+        var location = result.Location is { } l ? $" -> {l}" : "";
+        Console.Error.WriteLine($"Added {result.Added}, skipped {result.Skipped} (already present){location}.");
         return ExitOk;
     }
 
     static IReadOnlyList<Credential> ReadSource(ProviderRegistry registry, string id, Dictionary<string, string> options)
     {
-        if (!(registry.Get(id) is ICredentialSourceProvider provider))
+        if (registry.Get(id) is not ICredentialSourceProvider provider)
             throw new ProviderException($"'{id}' cannot be read from.");
-        var context = new ProviderContext(provider.SourceOptions, options, new ConsoleInteraction());
-        using var source = provider.OpenSource(context);
+        using var source = provider.OpenSource(new ProviderContext(provider.SourceOptions, options, new ConsoleInteraction()));
         return source.ReadCredentials();
     }
 
-    static string Truncate(string s, int max) => s.Length <= max ? s : s.Substring(0, max - 3) + "...";
+    static string Truncate(string s, int max) => s.Length <= max ? s : $"{s[..(max - 3)]}...";
 
     static void PrintTable(string[] headers, List<string[]> rows)
     {
-        var widths = headers.Select((h, i) => Math.Max(h.Length, rows.Count == 0 ? 0 : rows.Max(r => r[i].Length))).ToArray();
+        var widths = headers.Select((h, i) => rows.Select(r => r[i].Length).Prepend(h.Length).Max()).ToArray();
         void Print(string[] cells) =>
             Console.WriteLine(string.Join("  ", cells.Select((c, i) => i == cells.Length - 1 ? c : c.PadRight(widths[i]))));
         Print(headers);
@@ -203,18 +203,15 @@ Examples:
     }
 }
 
-internal sealed class UsageException : Exception
-{
-    public UsageException(string message) : base(message) { }
-}
+internal sealed class UsageException(string message) : Exception(message);
 
 /// <summary>Minimal parser: a command, positionals, -i/-o key=value pairs and flags.</summary>
 internal sealed class CommandLine
 {
     public string? Command { get; private set; }
-    public List<string> Positionals { get; } = new List<string>();
-    public Dictionary<string, string> InOptions { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-    public Dictionary<string, string> OutOptions { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public List<string> Positionals { get; } = [];
+    public Dictionary<string, string> InOptions { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> OutOptions { get; } = new(StringComparer.OrdinalIgnoreCase);
     public bool ShowPasswords { get; private set; }
     public bool DryRun { get; private set; }
 
@@ -226,13 +223,13 @@ internal sealed class CommandLine
             var a = args[i];
             switch (a)
             {
-                case "-h": case "--help": case "/?":
+                case "-h" or "--help" or "/?":
                     cmd.Command = "help";
                     return cmd;
-                case "-i": case "--in":
+                case "-i" or "--in":
                     AddOption(cmd.InOptions, a, NextValue(args, ref i, a));
                     break;
-                case "-o": case "--out":
+                case "-o" or "--out":
                     AddOption(cmd.OutOptions, a, NextValue(args, ref i, a));
                     break;
                 case "--show-passwords":
@@ -241,10 +238,10 @@ internal sealed class CommandLine
                 case "--dry-run":
                     cmd.DryRun = true;
                     break;
+                case ['-', _, ..]:
+                    throw new UsageException($"Unknown flag '{a}'.");
                 default:
-                    if (a.StartsWith("-") && a != "-")
-                        throw new UsageException($"Unknown flag '{a}'.");
-                    if (cmd.Command == null) cmd.Command = a.ToLowerInvariant();
+                    if (cmd.Command is null) cmd.Command = a.ToLowerInvariant();
                     else cmd.Positionals.Add(a);
                     break;
             }
@@ -252,19 +249,14 @@ internal sealed class CommandLine
         return cmd;
     }
 
-    static string NextValue(string[] args, ref int i, string flag)
-    {
-        if (i + 1 >= args.Length)
-            throw new UsageException($"'{flag}' needs a key=value argument.");
-        return args[++i];
-    }
+    static string NextValue(string[] args, ref int i, string flag) =>
+        i + 1 < args.Length ? args[++i] : throw new UsageException($"'{flag}' needs a key=value argument.");
 
     static void AddOption(Dictionary<string, string> target, string flag, string pair)
     {
-        var eq = pair.IndexOf('=');
-        if (eq <= 0)
+        if (pair.Split('=', 2) is not [var key, var value] || key.Trim() is not { Length: > 0 } name)
             throw new UsageException($"'{flag} {pair}': expected key=value.");
-        target[pair.Substring(0, eq).Trim()] = pair.Substring(eq + 1);
+        target[name] = value;
     }
 
     public string RequirePositional(int index, string name) =>

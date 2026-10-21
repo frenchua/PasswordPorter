@@ -3,7 +3,6 @@ using PasswordPorter.KeePass;
 using PasswordPorter.KeePass.Kdbx;
 using PasswordPorter.Providers;
 using PasswordPorter.Providers.Csv;
-using PasswordPorter.Text;
 using Xunit;
 
 namespace PasswordPorter.Tests;
@@ -11,9 +10,9 @@ namespace PasswordPorter.Tests;
 public class ProviderTests
 {
     static Dictionary<string, string> Opts(params string[] pairs) =>
-        pairs.Select(p => p.Split(new[] { '=' }, 2)).ToDictionary(p => p[0], p => p[1]);
+        pairs.Select(p => p.Split('=', 2)).ToDictionary(p => p[0], p => p[1]);
 
-    static readonly string[] FastKdfOptions = { "kdf-memory=1", "kdf-iterations=1" };
+    static readonly string[] FastKdfOptions = ["kdf-memory=1", "kdf-iterations=1"];
 
     static Credential Login(string url, string user, string password, params string[] folder)
     {
@@ -25,7 +24,7 @@ public class ProviderTests
     static WriteResult WriteKeePass(string file, IReadOnlyList<Credential> creds, params string[] extra)
     {
         var provider = new KeePassProvider();
-        var options = Opts(new[] { "file=" + file, "password=pw" }.Concat(FastKdfOptions).Concat(extra).ToArray());
+        var options = Opts([$"file={file}", "password=pw", .. FastKdfOptions, .. extra]);
         using var target = provider.OpenTarget(new ProviderContext(provider.TargetOptions, options));
         return target.Write(creds);
     }
@@ -33,7 +32,7 @@ public class ProviderTests
     static IReadOnlyList<Credential> ReadKeePass(string file)
     {
         var provider = new KeePassProvider();
-        using var source = provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts("file=" + file, "password=pw")));
+        using var source = provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts($"file={file}", "password=pw")));
         return source.ReadCredentials();
     }
 
@@ -43,10 +42,10 @@ public class ProviderTests
         using var dir = new TempDir();
         var file = dir.File("out.kdbx");
 
-        var first = WriteKeePass(file, new[] { Login("https://a.example", "alice", "1"), Login("https://b.example", "bob", "2", "Sub") });
+        var first = WriteKeePass(file, [Login("https://a.example", "alice", "1"), Login("https://b.example", "bob", "2", "Sub")]);
         Assert.Equal(2, first.Added);
 
-        var second = WriteKeePass(file, new[] { Login("https://a.example", "alice", "1"), Login("https://c.example", "carol", "3") });
+        var second = WriteKeePass(file, [Login("https://a.example", "alice", "1"), Login("https://c.example", "carol", "3")]);
         Assert.Equal(1, second.Added);
         Assert.Equal(1, second.Skipped);
 
@@ -64,7 +63,7 @@ public class ProviderTests
     {
         using var dir = new TempDir();
         var file = dir.File("out.kdbx");
-        var creds = new[] { Login("https://a.example", "alice", "1") };
+        Credential[] creds = [Login("https://a.example", "alice", "1")];
         WriteKeePass(file, creds, "group=Browsers/Firefox");
         var r = WriteKeePass(file, creds, "group=Browsers/Firefox", "duplicates=add", "backup=false");
         Assert.Equal(1, r.Added);
@@ -93,10 +92,10 @@ public class ProviderTests
     {
         using var dir = new TempDir();
         var file = dir.File("x.kdbx");
-        WriteKeePass(file, new[] { Login("https://a.example", "a", "b") });
+        WriteKeePass(file, [Login("https://a.example", "a", "b")]);
         var provider = new KeePassProvider();
         var e = Assert.Throws<ProviderException>(() =>
-            provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts("file=" + file, "password=nope"))));
+            provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts($"file={file}", "password=nope"))));
         Assert.Contains("Wrong master password", e.Message);
     }
 
@@ -121,10 +120,10 @@ public class ProviderTests
         c.Fields["HTTP Realm"] = "realm";
 
         var provider = new CsvProvider();
-        using (var t = provider.OpenTarget(new ProviderContext(provider.TargetOptions, Opts("file=" + file))))
-            t.Write(new[] { c });
+        using (var t = provider.OpenTarget(new ProviderContext(provider.TargetOptions, Opts($"file={file}"))))
+            t.Write([c]);
 
-        using var s = provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts("file=" + file)));
+        using var s = provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts($"file={file}")));
         var back = s.ReadCredentials().Single();
         Assert.Equal(c.Password, back.Password);
         Assert.Equal(c.Notes, back.Notes);
@@ -141,7 +140,7 @@ public class ProviderTests
             "\"url\",\"username\",\"password\",\"httpRealm\",\"formActionOrigin\",\"guid\",\"timeCreated\",\"timeLastUsed\",\"timePasswordChanged\"\r\n" +
             "\"https://example.com\",\"me\",\"secret\",,\"https://example.com\",\"{1}\",\"1\",\"2\",\"3\"\r\n");
         var provider = new CsvProvider();
-        using var s = provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts("file=" + file)));
+        using var s = provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts($"file={file}")));
         var c = s.ReadCredentials().Single();
         Assert.Equal("https://example.com", c.Url);
         Assert.Equal("me", c.Username);
@@ -175,16 +174,35 @@ public class ProviderTests
         using var dir = new TempDir();
         Directory.CreateDirectory(Path.Combine(dir.Path, "Profiles", "abc.default"));
         Directory.CreateDirectory(Path.Combine(dir.Path, "Profiles", "xyz.default-release"));
-        var ini = new[]
-        {
-            "[Install308046B0AF4A39CB]", "Default=Profiles/xyz.default-release", "Locked=1", "",
-            "[Profile1]", "Name=default", "IsRelative=1", "Path=Profiles/abc.default", "Default=1", "",
-            "[Profile0]", "Name=default-release", "IsRelative=1", "Path=Profiles/xyz.default-release", "",
-            "[Profile2]", "Name=missing", "IsRelative=1", "Path=Profiles/gone", "",
-            "[General]", "StartWithLastProfile=1", "Version=2",
-        };
-        var profiles = FirefoxProfiles.ParseProfilesIni(dir.Path, ini);
+        const string ini = """
+            ; written by Firefox
+            [Install308046B0AF4A39CB]
+            Default=Profiles/xyz.default-release
+            Locked=1
+
+            [Profile1]
+            Name=default
+            IsRelative=1
+            Path=Profiles/abc.default
+            Default=1
+
+            [Profile0]
+            Name=default-release
+            IsRelative=1
+            Path=Profiles/xyz.default-release
+
+            [Profile2]
+            Name=missing
+            IsRelative=1
+            Path=Profiles/gone
+
+            [General]
+            StartWithLastProfile=1
+            Version=2
+            """;
+        var profiles = FirefoxProfiles.ParseProfilesIni(dir.Path, ini.Split('\n'));
         Assert.Equal(2, profiles.Count);
         Assert.Equal("default-release", profiles.Single(p => p.IsDefault).Name);
+        Assert.Equal("default", profiles.Single(p => !p.IsDefault).Name);
     }
 }

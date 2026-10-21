@@ -4,70 +4,37 @@ using PasswordPorter.KeePass.Crypto;
 namespace PasswordPorter.KeePass.Kdbx;
 
 /// <summary>The file is not a valid KDBX database (corrupt, truncated or an unsupported variant).</summary>
-public class KdbxFormatException : Exception
-{
-    public KdbxFormatException(string message) : base(message) { }
-}
+public class KdbxFormatException(string message) : Exception(message);
 
 /// <summary>The password and/or key file do not open the database.</summary>
-public sealed class KdbxInvalidKeyException : Exception
-{
-    public KdbxInvalidKeyException() : base("The master key is wrong (password or key file), or the file is corrupt.") { }
-}
+public sealed class KdbxInvalidKeyException()
+    : Exception("The master key is wrong (password or key file), or the file is corrupt.");
 
 /// <summary>Bounds-checked little-endian reader over a byte array.</summary>
-internal sealed class ByteReader
+internal sealed class ByteReader(byte[] data, int position = 0)
 {
-    readonly byte[] data;
-
-    public ByteReader(byte[] data, int position = 0)
-    {
-        this.data = data;
-        Position = position;
-    }
-
-    public int Position { get; private set; }
+    public int Position { get; private set; } = position;
 
     public int Remaining => data.Length - Position;
 
-    void Need(int count)
+    ReadOnlySpan<byte> Take(int count)
     {
         if (count < 0 || count > Remaining)
             throw new KdbxFormatException("The file is truncated or corrupt.");
-    }
-
-    public byte ReadByte()
-    {
-        Need(1);
-        return data[Position++];
-    }
-
-    public ushort ReadUInt16()
-    {
-        Need(2);
-        var v = (ushort)(data[Position] | (data[Position + 1] << 8));
-        Position += 2;
-        return v;
-    }
-
-    public uint ReadUInt32()
-    {
-        Need(4);
-        var v = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(Position));
-        Position += 4;
-        return v;
-    }
-
-    public int ReadInt32() => (int)ReadUInt32();
-
-    public byte[] ReadBytes(int count)
-    {
-        Need(count);
-        var b = new byte[count];
-        Buffer.BlockCopy(data, Position, b, 0, count);
+        var span = data.AsSpan(Position, count);
         Position += count;
-        return b;
+        return span;
     }
+
+    public byte ReadByte() => Take(1)[0];
+
+    public ushort ReadUInt16() => BinaryPrimitives.ReadUInt16LittleEndian(Take(2));
+
+    public uint ReadUInt32() => BinaryPrimitives.ReadUInt32LittleEndian(Take(4));
+
+    public int ReadInt32() => BinaryPrimitives.ReadInt32LittleEndian(Take(4));
+
+    public byte[] ReadBytes(int count) => Take(count).ToArray();
 }
 
 /// <summary>
@@ -86,15 +53,17 @@ internal sealed class VariantDictionary
         ByteArray = 0x42,
     }
 
+    readonly record struct Item(ValueType Type, object Value);
+
     const ushort Version = 0x0100;
-    readonly List<string> order = new List<string>();
-    readonly Dictionary<string, KeyValuePair<ValueType, object>> items = new Dictionary<string, KeyValuePair<ValueType, object>>(StringComparer.Ordinal);
+    readonly List<string> order = [];
+    readonly Dictionary<string, Item> items = new(StringComparer.Ordinal);
 
     void Set(string key, ValueType type, object value)
     {
         if (!items.ContainsKey(key))
             order.Add(key);
-        items[key] = new KeyValuePair<ValueType, object>(type, value);
+        items[key] = new(type, value);
     }
 
     public void SetUInt32(string key, uint value) => Set(key, ValueType.UInt32, value);
@@ -105,24 +74,18 @@ internal sealed class VariantDictionary
 
     public byte[]? GetBytes(string key) => items.TryGetValue(key, out var v) ? v.Value as byte[] : null;
 
-    public ulong? GetUInt64(string key)
-    {
-        if (!items.TryGetValue(key, out var v)) return null;
-        switch (v.Value)
+    public ulong? GetUInt64(string key) => items.TryGetValue(key, out var v)
+        ? v.Value switch
         {
-            case ulong u: return u;
-            case uint u: return u;
-            case long l when l >= 0: return (ulong)l;
-            case int i when i >= 0: return (ulong)i;
-            default: return null;
+            ulong u => u,
+            uint u => u,
+            long l and >= 0 => (ulong)l,
+            int i and >= 0 => (ulong)i,
+            _ => null,
         }
-    }
+        : null;
 
-    public uint? GetUInt32(string key)
-    {
-        var v = GetUInt64(key);
-        return v.HasValue && v.Value <= uint.MaxValue ? (uint)v.Value : (uint?)null;
-    }
+    public uint? GetUInt32(string key) => GetUInt64(key) is { } v and <= uint.MaxValue ? (uint)v : null;
 
     public static VariantDictionary Deserialize(byte[] bytes)
     {
@@ -132,24 +95,22 @@ internal sealed class VariantDictionary
             throw new KdbxFormatException("Unsupported VariantDictionary version.");
 
         var dict = new VariantDictionary();
-        while (true)
+        while (r.ReadByte() is var type and not 0)
         {
-            var type = r.ReadByte();
-            if (type == 0)
-                break;
             var key = Encoding.UTF8.GetString(r.ReadBytes(r.ReadInt32()));
             var value = r.ReadBytes(r.ReadInt32());
-            switch ((ValueType)type)
+            object parsed = (ValueType)type switch
             {
-                case ValueType.UInt32: dict.Set(key, ValueType.UInt32, BinaryPrimitives.ReadUInt32LittleEndian(Check(value, 4))); break;
-                case ValueType.UInt64: dict.Set(key, ValueType.UInt64, BinaryPrimitives.ReadUInt64LittleEndian(Check(value, 8))); break;
-                case ValueType.Bool: dict.Set(key, ValueType.Bool, Check(value, 1)[0] != 0); break;
-                case ValueType.Int32: dict.Set(key, ValueType.Int32, (int)BinaryPrimitives.ReadUInt32LittleEndian(Check(value, 4))); break;
-                case ValueType.Int64: dict.Set(key, ValueType.Int64, (long)BinaryPrimitives.ReadUInt64LittleEndian(Check(value, 8))); break;
-                case ValueType.String: dict.Set(key, ValueType.String, Encoding.UTF8.GetString(value)); break;
-                case ValueType.ByteArray: dict.Set(key, ValueType.ByteArray, value); break;
-                default: throw new KdbxFormatException($"Unknown VariantDictionary value type 0x{type:X2}.");
-            }
+                ValueType.UInt32 => BinaryPrimitives.ReadUInt32LittleEndian(Check(value, 4)),
+                ValueType.UInt64 => BinaryPrimitives.ReadUInt64LittleEndian(Check(value, 8)),
+                ValueType.Bool => Check(value, 1)[0] != 0,
+                ValueType.Int32 => BinaryPrimitives.ReadInt32LittleEndian(Check(value, 4)),
+                ValueType.Int64 => BinaryPrimitives.ReadInt64LittleEndian(Check(value, 8)),
+                ValueType.String => Encoding.UTF8.GetString(value),
+                ValueType.ByteArray => value,
+                _ => throw new KdbxFormatException($"Unknown VariantDictionary value type 0x{type:X2}."),
+            };
+            dict.Set(key, (ValueType)type, parsed);
         }
         return dict;
     }
@@ -160,28 +121,27 @@ internal sealed class VariantDictionary
     public byte[] Serialize()
     {
         using var ms = new MemoryStream();
-        ms.WriteByte((byte)(Version & 0xFF));
-        ms.WriteByte((byte)(Version >> 8));
+        ms.Write(CryptoUtil.UInt32Bytes(Version).AsSpan(0, 2));
         foreach (var key in order)
         {
-            var item = items[key];
-            byte[] value;
-            switch (item.Key)
+            var (type, raw) = items[key];
+            byte[] value = raw switch
             {
-                case ValueType.UInt32: value = CryptoUtil.UInt32Bytes((uint)item.Value); break;
-                case ValueType.UInt64: value = CryptoUtil.UInt64Bytes((ulong)item.Value); break;
-                case ValueType.Bool: value = new[] { (byte)((bool)item.Value ? 1 : 0) }; break;
-                case ValueType.Int32: value = CryptoUtil.UInt32Bytes((uint)(int)item.Value); break;
-                case ValueType.Int64: value = CryptoUtil.UInt64Bytes((ulong)(long)item.Value); break;
-                case ValueType.String: value = Encoding.UTF8.GetBytes((string)item.Value); break;
-                default: value = (byte[])item.Value; break;
-            }
+                uint u => CryptoUtil.UInt32Bytes(u),
+                ulong u => CryptoUtil.UInt64Bytes(u),
+                bool b => [(byte)(b ? 1 : 0)],
+                int i => CryptoUtil.UInt32Bytes((uint)i),
+                long l => CryptoUtil.UInt64Bytes((ulong)l),
+                string s => Encoding.UTF8.GetBytes(s),
+                byte[] bytes => bytes,
+                _ => throw new InvalidOperationException($"Unsupported VariantDictionary value {raw.GetType()}."),
+            };
             var keyBytes = Encoding.UTF8.GetBytes(key);
-            ms.WriteByte((byte)item.Key);
-            ms.Write(CryptoUtil.UInt32Bytes((uint)keyBytes.Length), 0, 4);
-            ms.Write(keyBytes, 0, keyBytes.Length);
-            ms.Write(CryptoUtil.UInt32Bytes((uint)value.Length), 0, 4);
-            ms.Write(value, 0, value.Length);
+            ms.WriteByte((byte)type);
+            ms.Write(CryptoUtil.UInt32Bytes((uint)keyBytes.Length));
+            ms.Write(keyBytes);
+            ms.Write(CryptoUtil.UInt32Bytes((uint)value.Length));
+            ms.Write(value);
         }
         ms.WriteByte(0);
         return ms.ToArray();
@@ -199,5 +159,5 @@ internal static class KdbxUuids
     public static readonly byte[] KdfArgon2d = Convert.FromHexString("ef636ddf8c29444b91f7a9a403e30a0c");
     public static readonly byte[] KdfArgon2id = Convert.FromHexString("9e298b1956db4773b23dfc3ec6f0a1e6");
 
-    public static bool Equal(byte[]? a, byte[] b) => a != null && CryptographicOperations.FixedTimeEquals(a, b);
+    public static bool Equal(byte[]? a, byte[] b) => a is not null && a.AsSpan().SequenceEqual(b);
 }

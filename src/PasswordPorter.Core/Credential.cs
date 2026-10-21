@@ -13,7 +13,7 @@ public sealed class Credential
     public string? Notes { get; set; }
 
     /// <summary>Folder path, outermost first (e.g. <c>["Work", "Servers"]</c>). Empty means the top level.</summary>
-    public IList<string> Folder { get; } = new List<string>();
+    public IList<string> Folder { get; } = [];
 
     /// <summary>Extra named fields without a dedicated property (HTTP realm, TOTP secret, custom fields...).</summary>
     public IDictionary<string, string> Fields { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -28,17 +28,11 @@ public sealed class Credential
     public DateTime? LastUsed { get; set; }
 
     /// <summary>The title, falling back to the URL's host name.</summary>
-    public string DisplayTitle
-    {
-        get
-        {
-            if (!string.IsNullOrEmpty(Title))
-                return Title!;
-            if (Uri.TryCreate(Url, UriKind.Absolute, out var uri) && uri.Host.Length > 0)
-                return uri.Host;
-            return Url ?? "(untitled)";
-        }
-    }
+    public string DisplayTitle =>
+        !string.IsNullOrEmpty(Title) ? Title
+        : Uri.TryCreate(Url, UriKind.Absolute, out var uri) && uri.Host.Length > 0 ? uri.Host
+        : Url ?? "(untitled)";
 
-    public override string ToString() => DisplayTitle + (string.IsNullOrEmpty(Username) ? "" : " (" + Username + ")");
+    public override string ToString() =>
+        string.IsNullOrEmpty(Username) ? DisplayTitle : $"{DisplayTitle} ({Username})";
 }

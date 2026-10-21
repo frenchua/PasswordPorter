@@ -20,42 +20,43 @@ internal static class Argon2
     public static byte[] Hash(Argon2Type type, byte[] password, byte[] salt, uint parallelism, uint memoryKiB,
         uint iterations, uint version = Version13, int tagLength = 32, byte[]? secret = null, byte[]? associatedData = null)
     {
-        if (parallelism < 1 || parallelism > 0xFFFFFF) throw new ArgumentOutOfRangeException(nameof(parallelism));
-        if (iterations < 1) throw new ArgumentOutOfRangeException(nameof(iterations));
-        if (version != 0x10 && version != Version13) throw new ArgumentOutOfRangeException(nameof(version));
-        if (tagLength < 4) throw new ArgumentOutOfRangeException(nameof(tagLength));
-        secret ??= Array.Empty<byte>();
-        associatedData ??= Array.Empty<byte>();
+        ArgumentOutOfRangeException.ThrowIfZero(parallelism);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(parallelism, 0xFFFFFFu);
+        ArgumentOutOfRangeException.ThrowIfZero(iterations);
+        ArgumentOutOfRangeException.ThrowIfLessThan(tagLength, 4);
+        if (version is not (0x10 or Version13))
+            throw new ArgumentOutOfRangeException(nameof(version));
+        secret ??= [];
+        associatedData ??= [];
 
         var inst = new Instance(type, version, parallelism, memoryKiB, iterations);
 
         // H0 = H(p, T, m, t, v, y, |P|, P, |S|, S, |K|, K, |X|, X)
-        var h0Input = Concat(
-            CryptoUtil.UInt32Bytes(parallelism), CryptoUtil.UInt32Bytes((uint)tagLength),
-            CryptoUtil.UInt32Bytes(memoryKiB), CryptoUtil.UInt32Bytes(iterations),
-            CryptoUtil.UInt32Bytes(version), CryptoUtil.UInt32Bytes((uint)type),
-            CryptoUtil.UInt32Bytes((uint)password.Length), password,
-            CryptoUtil.UInt32Bytes((uint)salt.Length), salt,
-            CryptoUtil.UInt32Bytes((uint)secret.Length), secret,
-            CryptoUtil.UInt32Bytes((uint)associatedData.Length), associatedData);
+        byte[] h0Input =
+        [
+            .. Le(parallelism), .. Le((uint)tagLength), .. Le(memoryKiB), .. Le(iterations), .. Le(version), .. Le((uint)type),
+            .. Le((uint)password.Length), .. password,
+            .. Le((uint)salt.Length), .. salt,
+            .. Le((uint)secret.Length), .. secret,
+            .. Le((uint)associatedData.Length), .. associatedData,
+        ];
         var h0 = Blake2b.Hash(h0Input, 64);
-        Array.Clear(h0Input, 0, h0Input.Length);
+        CryptographicOperations.ZeroMemory(h0Input);
 
-        // First two blocks of each lane.
+        // First two blocks of each lane: H'(1024, H0 || j || lane).
         var seed = new byte[72];
-        Buffer.BlockCopy(h0, 0, seed, 0, 64);
+        h0.CopyTo(seed, 0);
         for (uint lane = 0; lane < parallelism; lane++)
         {
             for (uint j = 0; j < 2; j++)
             {
                 BinaryPrimitives.WriteUInt32LittleEndian(seed.AsSpan(64), j);
                 BinaryPrimitives.WriteUInt32LittleEndian(seed.AsSpan(68), lane);
-                var block = HPrime(seed, 1024);
-                inst.LoadBlock(lane * inst.LaneLength + j, block);
+                inst.LoadBlock(lane * inst.LaneLength + j, HPrime(seed, 1024));
             }
         }
-        Array.Clear(seed, 0, seed.Length);
-        Array.Clear(h0, 0, h0.Length);
+        CryptographicOperations.ZeroMemory(seed);
+        CryptographicOperations.ZeroMemory(h0);
 
         for (uint pass = 0; pass < iterations; pass++)
         {
@@ -70,106 +71,83 @@ internal static class Argon2
         }
 
         // Final block: XOR of the last block of every lane.
-        var final = new ulong[BlockWords];
+        Span<ulong> final = stackalloc ulong[BlockWords];
         for (uint lane = 0; lane < parallelism; lane++)
         {
-            long off = (long)(lane * inst.LaneLength + inst.LaneLength - 1) * BlockWords;
+            var last = inst.Block(lane * inst.LaneLength + inst.LaneLength - 1);
             for (int k = 0; k < BlockWords; k++)
-                final[k] ^= inst.Memory[off + k];
+                final[k] ^= last[k];
         }
         var finalBytes = new byte[1024];
         for (int k = 0; k < BlockWords; k++)
             BinaryPrimitives.WriteUInt64LittleEndian(finalBytes.AsSpan(k * 8), final[k]);
 
         var tag = HPrime(finalBytes, tagLength);
-        Array.Clear(inst.Memory, 0, inst.Memory.Length);
-        Array.Clear(finalBytes, 0, finalBytes.Length);
+        Array.Clear(inst.Memory);
+        CryptographicOperations.ZeroMemory(finalBytes);
         return tag;
     }
 
+    static byte[] Le(uint value) => CryptoUtil.UInt32Bytes(value);
+
     /// <summary>The variable-length hash H' from RFC 9106 section 3.3.</summary>
-    internal static byte[] HPrime(byte[] input, int outLength)
+    internal static byte[] HPrime(ReadOnlySpan<byte> input, int outLength)
     {
-        var prefixed = Concat(CryptoUtil.UInt32Bytes((uint)outLength), input);
+        byte[] prefixed = [.. Le((uint)outLength), .. input];
         if (outLength <= 64)
             return Blake2b.Hash(prefixed, outLength);
 
         var result = new byte[outLength];
         int r = (outLength + 31) / 32 - 2;
         var v = Blake2b.Hash(prefixed, 64);
-        Buffer.BlockCopy(v, 0, result, 0, 32);
+        v.AsSpan(0, 32).CopyTo(result);
         for (int i = 1; i < r; i++)
         {
             v = Blake2b.Hash(v, 64);
-            Buffer.BlockCopy(v, 0, result, i * 32, 32);
+            v.AsSpan(0, 32).CopyTo(result.AsSpan(i * 32));
         }
-        var last = Blake2b.Hash(v, outLength - 32 * r);
-        Buffer.BlockCopy(last, 0, result, 32 * r, last.Length);
+        Blake2b.Hash(v, outLength - 32 * r).CopyTo(result.AsSpan(32 * r));
         return result;
     }
 
-    static byte[] Concat(params byte[][] parts)
+    sealed class Instance(Argon2Type type, uint version, uint lanes, uint memoryKiB, uint iterations)
     {
-        int len = 0;
-        foreach (var p in parts) len += p.Length;
-        var result = new byte[len];
-        int o = 0;
-        foreach (var p in parts)
-        {
-            Buffer.BlockCopy(p, 0, result, o, p.Length);
-            o += p.Length;
-        }
-        return result;
-    }
+        public readonly uint SegmentLength = Math.Max(memoryKiB, 2 * SyncPoints * lanes) / (lanes * SyncPoints);
+        public uint LaneLength => SegmentLength * SyncPoints;
+        uint MemoryBlocks => LaneLength * lanes;
 
-    sealed class Instance
-    {
-        readonly Argon2Type type;
-        readonly uint version, lanes, iterations;
-        public readonly uint MemoryBlocks, LaneLength, SegmentLength;
-        public readonly ulong[] Memory;
+        public readonly ulong[] Memory =
+            new ulong[(long)(Math.Max(memoryKiB, 2 * SyncPoints * lanes) / (lanes * SyncPoints)) * SyncPoints * lanes * BlockWords];
 
-        public Instance(Argon2Type type, uint version, uint lanes, uint memoryKiB, uint iterations)
-        {
-            this.type = type;
-            this.version = version;
-            this.lanes = lanes;
-            this.iterations = iterations;
-
-            uint blocks = Math.Max(memoryKiB, 2 * SyncPoints * lanes);
-            SegmentLength = blocks / (lanes * SyncPoints);
-            MemoryBlocks = SegmentLength * lanes * SyncPoints;
-            LaneLength = SegmentLength * SyncPoints;
-            Memory = new ulong[(long)MemoryBlocks * BlockWords];
-        }
+        public Span<ulong> Block(long index) => Memory.AsSpan((int)(index * BlockWords), BlockWords);
 
         public void LoadBlock(uint index, byte[] block)
         {
-            long off = (long)index * BlockWords;
+            var target = Block(index);
             for (int k = 0; k < BlockWords; k++)
-                Memory[off + k] = BinaryPrimitives.ReadUInt64LittleEndian(block.AsSpan(k * 8));
+                target[k] = BinaryPrimitives.ReadUInt64LittleEndian(block.AsSpan(k * 8));
         }
 
         public void FillSegment(uint pass, uint lane, uint slice)
         {
-            var scratchR = new ulong[BlockWords];
-            var scratchT = new ulong[BlockWords];
+            Span<ulong> r = stackalloc ulong[BlockWords];
+            Span<ulong> t = stackalloc ulong[BlockWords];
 
             bool dataIndependent = type == Argon2Type.Argon2i
                 || (type == Argon2Type.Argon2id && pass == 0 && slice < SyncPoints / 2);
 
-            ulong[]? addressBlock = null, inputBlock = null, zeroBlock = null;
+            // Only used for data-independent addressing.
+            Span<ulong> address = stackalloc ulong[BlockWords];
+            Span<ulong> input = stackalloc ulong[BlockWords];
+            Span<ulong> zero = stackalloc ulong[BlockWords];
             if (dataIndependent)
             {
-                addressBlock = new ulong[BlockWords];
-                inputBlock = new ulong[BlockWords];
-                zeroBlock = new ulong[BlockWords];
-                inputBlock[0] = pass;
-                inputBlock[1] = lane;
-                inputBlock[2] = slice;
-                inputBlock[3] = MemoryBlocks;
-                inputBlock[4] = iterations;
-                inputBlock[5] = (ulong)type;
+                input[0] = pass;
+                input[1] = lane;
+                input[2] = slice;
+                input[3] = MemoryBlocks;
+                input[4] = iterations;
+                input[5] = (ulong)type;
             }
 
             uint startIndex = 0;
@@ -177,7 +155,7 @@ internal static class Argon2
             {
                 startIndex = 2;
                 if (dataIndependent)
-                    NextAddresses(addressBlock!, inputBlock!, zeroBlock!, scratchR, scratchT);
+                    NextAddresses(address, input, zero, r, t);
             }
 
             uint currOffset = lane * LaneLength + slice * SegmentLength + startIndex;
@@ -192,97 +170,78 @@ internal static class Argon2
                 if (dataIndependent)
                 {
                     if (i % BlockWords == 0)
-                        NextAddresses(addressBlock!, inputBlock!, zeroBlock!, scratchR, scratchT);
-                    pseudoRand = addressBlock![i % BlockWords];
+                        NextAddresses(address, input, zero, r, t);
+                    pseudoRand = address[(int)(i % BlockWords)];
                 }
                 else
                 {
-                    pseudoRand = Memory[(long)prevOffset * BlockWords];
+                    pseudoRand = Block(prevOffset)[0];
                 }
 
-                ulong refLane = (pseudoRand >> 32) % lanes;
-                if (pass == 0 && slice == 0)
-                    refLane = lane;
-
+                ulong refLane = pass == 0 && slice == 0 ? lane : (pseudoRand >> 32) % lanes;
                 uint refIndex = IndexAlpha(pass, slice, i, (uint)pseudoRand, refLane == lane);
-                long refOffset = (long)refLane * LaneLength + refIndex;
 
                 bool withXor = version != 0x10 && pass != 0;
-                FillBlock(Memory, (long)prevOffset * BlockWords, Memory, refOffset * BlockWords,
-                    Memory, (long)currOffset * BlockWords, withXor, scratchR, scratchT);
+                FillBlock(Block(prevOffset), Block((long)refLane * LaneLength + refIndex), Block(currOffset), withXor, r, t);
             }
         }
 
         uint IndexAlpha(uint pass, uint slice, uint index, uint pseudoRand, bool sameLane)
         {
-            long areaSize;
-            if (pass == 0)
+            long areaSize = (pass, slice, sameLane) switch
             {
-                if (slice == 0)
-                    areaSize = index - 1;
-                else if (sameLane)
-                    areaSize = slice * SegmentLength + index - 1;
-                else
-                    areaSize = slice * SegmentLength + (index == 0 ? -1 : 0);
-            }
-            else
-            {
-                if (sameLane)
-                    areaSize = LaneLength - SegmentLength + index - 1;
-                else
-                    areaSize = LaneLength - SegmentLength + (index == 0 ? -1 : 0);
-            }
+                (0, 0, _) => index - 1,
+                (0, _, true) => slice * SegmentLength + index - 1,
+                (0, _, false) => slice * SegmentLength + (index == 0 ? -1 : 0),
+                (_, _, true) => LaneLength - SegmentLength + index - 1,
+                _ => LaneLength - SegmentLength + (index == 0 ? -1 : 0),
+            };
 
             ulong relative = pseudoRand;
             relative = (relative * relative) >> 32;
             relative = (ulong)areaSize - 1 - (((ulong)areaSize * relative) >> 32);
 
-            ulong start = 0;
-            if (pass != 0)
-                start = slice == SyncPoints - 1 ? 0 : (ulong)(slice + 1) * SegmentLength;
-
+            ulong start = pass == 0 || slice == SyncPoints - 1 ? 0 : (ulong)(slice + 1) * SegmentLength;
             return (uint)((start + relative) % LaneLength);
         }
 
-        static void NextAddresses(ulong[] address, ulong[] input, ulong[] zero, ulong[] r, ulong[] t)
+        static void NextAddresses(Span<ulong> address, Span<ulong> input, Span<ulong> zero, Span<ulong> r, Span<ulong> t)
         {
             input[6]++;
-            FillBlock(zero, 0, input, 0, address, 0, false, r, t);
-            FillBlock(zero, 0, address, 0, address, 0, false, r, t);
+            FillBlock(zero, input, address, false, r, t);
+            FillBlock(zero, address, address, false, r, t);
         }
     }
 
     /// <summary>next = G(prev, ref) (XORed into the existing next block when <paramref name="withXor"/>).</summary>
-    static void FillBlock(ulong[] prevArr, long prev, ulong[] refArr, long refOff, ulong[] nextArr, long next,
-        bool withXor, ulong[] r, ulong[] t)
+    static void FillBlock(ReadOnlySpan<ulong> prev, ReadOnlySpan<ulong> refBlock, Span<ulong> next,
+        bool withXor, Span<ulong> r, Span<ulong> t)
     {
         for (int k = 0; k < BlockWords; k++)
         {
-            r[k] = refArr[refOff + k] ^ prevArr[prev + k];
-            t[k] = withXor ? r[k] ^ nextArr[next + k] : r[k];
+            r[k] = refBlock[k] ^ prev[k];
+            t[k] = withXor ? r[k] ^ next[k] : r[k];
         }
 
         // Rows: eight 16-word groups.
-        for (int i = 0; i < 8; i++)
+        for (int b = 0; b < BlockWords; b += 16)
         {
-            int b = 16 * i;
             P(r, b, b + 1, b + 2, b + 3, b + 4, b + 5, b + 6, b + 7,
                  b + 8, b + 9, b + 10, b + 11, b + 12, b + 13, b + 14, b + 15);
         }
 
         // Columns: pairs of words at stride 16.
-        for (int i = 0; i < 8; i++)
+        for (int b = 0; b < 16; b += 2)
         {
-            int b = 2 * i;
             P(r, b, b + 1, b + 16, b + 17, b + 32, b + 33, b + 48, b + 49,
                  b + 64, b + 65, b + 80, b + 81, b + 96, b + 97, b + 112, b + 113);
         }
 
         for (int k = 0; k < BlockWords; k++)
-            nextArr[next + k] = t[k] ^ r[k];
+            next[k] = t[k] ^ r[k];
     }
 
-    static void P(ulong[] v, int v0, int v1, int v2, int v3, int v4, int v5, int v6, int v7,
+    static void P(Span<ulong> v, int v0, int v1, int v2, int v3, int v4, int v5, int v6, int v7,
         int v8, int v9, int v10, int v11, int v12, int v13, int v14, int v15)
     {
         GB(ref v[v0], ref v[v4], ref v[v8], ref v[v12]);

@@ -23,7 +23,7 @@ internal static class NssLocator
             return Path.GetFullPath(candidate);
         }
 
-        var tried = new List<string>();
+        List<string> tried = [];
         foreach (var dir in CandidateDirectories())
         {
             if (string.IsNullOrEmpty(dir))
@@ -88,13 +88,13 @@ internal static class NssLocator
     [SupportedOSPlatform("windows")]
     static List<string> RegistryInstallDirectories()
     {
-        var result = new List<string>();
+        List<string> result = [];
         try
         {
             foreach (var hive in (RegistryKey[])[Registry.LocalMachine, Registry.CurrentUser])
             {
                 using var products = hive.OpenSubKey(@"SOFTWARE\Mozilla\Mozilla Firefox");
-                if (products == null)
+                if (products is null)
                     continue;
                 foreach (var version in products.GetSubKeyNames())
                 {

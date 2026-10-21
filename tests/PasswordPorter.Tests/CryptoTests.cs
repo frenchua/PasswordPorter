@@ -71,9 +71,9 @@ public class CryptoTests
 
         var parts = new byte[200];
         var c = new ChaCha20(key, nonce);
-        c.Transform(parts, 0, 3);
-        c.Transform(parts, 3, 100);
-        c.Transform(parts, 103, 97);
+        c.Transform(parts.AsSpan(0, 3));
+        c.Transform(parts.AsSpan(3, 100));
+        c.Transform(parts.AsSpan(103));
         Assert.Equal(whole, parts);
     }
 }

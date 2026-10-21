@@ -40,7 +40,7 @@ public class KeePassLibInteropTests
     /// <summary>KeePassLib's view of a database's entries.</summary>
     static List<JsonElement> KeePassEntries(string path, string password, string? keyFile = null)
     {
-        var json = keyFile == null ? RunHelper("dump", path, password) : RunHelper("dump", path, password, keyFile);
+        var json = keyFile is null ? RunHelper("dump", path, password) : RunHelper("dump", path, password, keyFile);
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.GetProperty("entries").EnumerateArray().Select(e => e.Clone()).ToList();
     }

@@ -12,6 +12,9 @@ dotnet test PasswordPorter.sln
 - Everything targets `net10.0` (set once in `Directory.Build.props`), with implicit usings and
   nullable reference types on. Prefer BCL APIs (`System.Text.Json`, `BinaryPrimitives`,
   `RandomNumberGenerator`, `CryptographicOperations`, `Convert.FromHexString`...) over hand-rolled helpers.
+- Write current C#: file-scoped namespaces, primary constructors, records for data, collection
+  expressions (`[]`, spreads), switch expressions and patterns (`is null`, list/property patterns),
+  raw string literals, and spans for byte manipulation. Zero secrets with `CryptographicOperations.ZeroMemory`.
 - `tests/KeePassCheck` is the one exception: a test-only `net48` console app that wraps KeePassLib
   from `KeePass-2.61.1/KeePass.exe` (git-ignored, optional). KeePassLib needs .NET Framework APIs,
   so `KeePassLibInteropTests` run the helper as a separate process to cross-check our KDBX files

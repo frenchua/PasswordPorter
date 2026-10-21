@@ -3,13 +3,13 @@ namespace PasswordPorter.Providers;
 /// <summary>The set of providers a front end offers, looked up by <see cref="ProviderInfo.Id"/>.</summary>
 public sealed class ProviderRegistry
 {
-    readonly List<ICredentialProvider> providers = new List<ICredentialProvider>();
+    readonly List<ICredentialProvider> providers = [];
 
     public IReadOnlyList<ICredentialProvider> Providers => providers;
 
     public ProviderRegistry Register(ICredentialProvider provider)
     {
-        if (Find(provider.Info.Id) != null)
+        if (Find(provider.Info.Id) is not null)
             throw new ArgumentException($"A provider with id '{provider.Info.Id}' is already registered.", nameof(provider));
         providers.Add(provider);
         return this;
