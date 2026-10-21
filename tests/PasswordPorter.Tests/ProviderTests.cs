@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using PasswordPorter.Firefox;
 using PasswordPorter.KeePass;
 using PasswordPorter.KeePass.Kdbx;
@@ -154,19 +150,23 @@ public class ProviderTests
     }
 
     [Fact]
-    public void SimpleJson_ParsesLoginsShape()
+    public void FirefoxLogins_ParsesLoginsJson()
     {
-        var json = "{\"nextId\":3,\"logins\":[{\"id\":1,\"hostname\":\"https://x.example\",\"httpRealm\":null," +
-                   "\"encryptedUsername\":\"QUJD\",\"timeCreated\":1700000000123,\"esc\":\"a\\\"b\\u00e9\\n\"}],\"ok\":true,\"f\":1.5e2}";
-        var root = SimpleJson.AsObject(SimpleJson.Parse(json))!;
-        var login = SimpleJson.AsObject(SimpleJson.AsArray(root["logins"])![0])!;
-        Assert.Equal("https://x.example", login.GetString("hostname"));
-        Assert.Null(login["httpRealm"]);
-        Assert.Equal(1700000000123L, login.GetInt64("timeCreated"));
-        Assert.Equal("a\"bé\n", login.GetString("esc"));
-        Assert.Equal(true, root["ok"]);
-        Assert.Equal(150.0, root["f"]);
-        Assert.Throws<FormatException>(() => SimpleJson.Parse("{\"a\":}"));
+        // Unknown properties (id, guid, potentiallyVulnerablePasswords...) must be ignored.
+        var json = """
+            {"nextId":3,"logins":[{"id":1,"hostname":"https://x.example","httpRealm":null,
+             "encryptedUsername":"QUJD","encryptedPassword":"REVG","guid":"{x}","timeCreated":1700000000123}],
+             "potentiallyVulnerablePasswords":[],"version":3}
+            """;
+        var login = Assert.Single(FirefoxLogins.Parse(json));
+        Assert.Equal("https://x.example", login.Hostname);
+        Assert.Null(login.HttpRealm);
+        Assert.Equal("QUJD", login.EncryptedUsername);
+        Assert.Equal(1700000000123L, login.TimeCreated);
+        Assert.Null(login.TimeLastUsed);
+
+        Assert.Empty(FirefoxLogins.Parse("{}"));
+        Assert.Throws<ProviderException>(() => FirefoxLogins.Parse("{\"logins\":}"));
     }
 
     [Fact]

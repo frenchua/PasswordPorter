@@ -1,5 +1,3 @@
-using System;
-
 namespace PasswordPorter.KeePass.Crypto;
 
 /// <summary>Unkeyed BLAKE2b (RFC 7693) with 1..64 byte output, as needed by Argon2.</summary>
@@ -57,7 +55,7 @@ internal static class Blake2b
 
         var full = new byte[64];
         for (int i = 0; i < 8; i++)
-            CryptoUtil.WriteUInt64(full, i * 8, h[i]);
+            BinaryPrimitives.WriteUInt64LittleEndian(full.AsSpan(i * 8), h[i]);
         if (outLength == 64)
             return full;
         var result = new byte[outLength];
@@ -68,7 +66,7 @@ internal static class Blake2b
     static void Compress(ulong[] h, byte[] block, int offset, ulong t, bool last, ulong[] m, ulong[] v)
     {
         for (int i = 0; i < 16; i++)
-            m[i] = CryptoUtil.ReadUInt64(block, offset + i * 8);
+            m[i] = BinaryPrimitives.ReadUInt64LittleEndian(block.AsSpan(offset + i * 8));
         for (int i = 0; i < 8; i++)
         {
             v[i] = h[i];
@@ -98,14 +96,12 @@ internal static class Blake2b
     static void G(ulong[] v, int a, int b, int c, int d, ulong x, ulong y)
     {
         v[a] = v[a] + v[b] + x;
-        v[d] = RotR(v[d] ^ v[a], 32);
+        v[d] = BitOperations.RotateRight(v[d] ^ v[a], 32);
         v[c] = v[c] + v[d];
-        v[b] = RotR(v[b] ^ v[c], 24);
+        v[b] = BitOperations.RotateRight(v[b] ^ v[c], 24);
         v[a] = v[a] + v[b] + y;
-        v[d] = RotR(v[d] ^ v[a], 16);
+        v[d] = BitOperations.RotateRight(v[d] ^ v[a], 16);
         v[c] = v[c] + v[d];
-        v[b] = RotR(v[b] ^ v[c], 63);
+        v[b] = BitOperations.RotateRight(v[b] ^ v[c], 63);
     }
-
-    static ulong RotR(ulong x, int n) => (x >> n) | (x << (64 - n));
 }

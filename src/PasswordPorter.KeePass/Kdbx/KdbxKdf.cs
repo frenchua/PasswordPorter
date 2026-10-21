@@ -1,4 +1,3 @@
-using System;
 using System.Security.Cryptography;
 using PasswordPorter.KeePass.Crypto;
 
@@ -32,11 +31,11 @@ public sealed class KdbxKdfSettings
             case KdbxKdfAlgorithm.AesKdf:
                 p.SetBytes("$UUID", KdbxUuids.KdfAes);
                 p.SetUInt64("R", Iterations);
-                p.SetBytes("S", CryptoUtil.RandomBytes(32));
+                p.SetBytes("S", RandomNumberGenerator.GetBytes(32));
                 break;
             default:
                 p.SetBytes("$UUID", Algorithm == KdbxKdfAlgorithm.Argon2d ? KdbxUuids.KdfArgon2d : KdbxUuids.KdfArgon2id);
-                p.SetBytes("S", CryptoUtil.RandomBytes(32));
+                p.SetBytes("S", RandomNumberGenerator.GetBytes(32));
                 p.SetUInt32("P", Parallelism);
                 p.SetUInt64("M", MemoryBytes);
                 p.SetUInt64("I", Iterations);
@@ -81,7 +80,7 @@ internal static class KdbxKdf
     public static void Reseed(VariantDictionary p)
     {
         var current = p.GetBytes("S");
-        p.SetBytes("S", CryptoUtil.RandomBytes(current?.Length > 0 ? current!.Length : 32));
+        p.SetBytes("S", RandomNumberGenerator.GetBytes(current?.Length > 0 ? current!.Length : 32));
     }
 
     static byte[] AesKdf(byte[] key, byte[] seed, ulong rounds)

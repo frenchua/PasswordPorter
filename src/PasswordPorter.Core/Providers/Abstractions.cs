@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-
 namespace PasswordPorter.Providers;
 
 public enum ProviderKind
@@ -11,22 +8,8 @@ public enum ProviderKind
 }
 
 /// <summary>Static description of a provider.</summary>
-public sealed class ProviderInfo
-{
-    public ProviderInfo(string id, string displayName, ProviderKind kind, string description)
-    {
-        Id = id;
-        DisplayName = displayName;
-        Kind = kind;
-        Description = description;
-    }
-
-    /// <summary>Short, lower-case identifier used on the command line (e.g. <c>firefox</c>).</summary>
-    public string Id { get; }
-    public string DisplayName { get; }
-    public ProviderKind Kind { get; }
-    public string Description { get; }
-}
+/// <param name="Id">Short, lower-case identifier used on the command line (e.g. <c>firefox</c>).</param>
+public sealed record ProviderInfo(string Id, string DisplayName, ProviderKind Kind, string Description);
 
 /// <summary>
 /// Base interface for everything that knows about one browser, password manager or file format.
@@ -73,37 +56,11 @@ public interface ICredentialTarget : IDisposable
     WriteResult Write(IReadOnlyList<Credential> credentials);
 }
 
-public sealed class ProfileInfo
-{
-    public ProfileInfo(string name, string path, bool isDefault)
-    {
-        Name = name;
-        Path = path;
-        IsDefault = isDefault;
-    }
+public sealed record ProfileInfo(string Name, string Path, bool IsDefault);
 
-    public string Name { get; }
-    public string Path { get; }
-    public bool IsDefault { get; }
-}
-
-public sealed class WriteResult
-{
-    public WriteResult(int added, int skipped, string? location)
-    {
-        Added = added;
-        Skipped = skipped;
-        Location = location;
-    }
-
-    public int Added { get; }
-
-    /// <summary>Credentials not written, e.g. because an identical one already existed.</summary>
-    public int Skipped { get; }
-
-    /// <summary>Where the credentials ended up (a file path, for instance), for display.</summary>
-    public string? Location { get; }
-}
+/// <param name="Skipped">Credentials not written, e.g. because an identical one already existed.</param>
+/// <param name="Location">Where the credentials ended up (a file path, for instance), for display.</param>
+public sealed record WriteResult(int Added, int Skipped, string? Location);
 
 /// <summary>
 /// An error the user can act on (wrong password, missing file, unsupported format...).

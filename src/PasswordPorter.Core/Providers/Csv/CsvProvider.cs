@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Text;
 using PasswordPorter.Text;
 
@@ -17,18 +13,18 @@ public sealed class CsvProvider : ICredentialSourceProvider, ICredentialTargetPr
         "csv", "CSV file", ProviderKind.File,
         "Unencrypted CSV. Reads exports from Firefox, Chrome, Bitwarden, KeePass and similar; writes a generic layout.");
 
-    public IReadOnlyList<ProviderOption> SourceOptions { get; } = new[]
-    {
-        new ProviderOption("file", "CSV file to read, or '-' for standard input.", required: true),
-        new ProviderOption("delimiter", "Field delimiter.", defaultValue: ","),
-    };
+    public IReadOnlyList<ProviderOption> SourceOptions { get; } =
+    [
+        new ProviderOption("file", "CSV file to read, or '-' for standard input.", IsRequired: true),
+        new ProviderOption("delimiter", "Field delimiter.", DefaultValue: ","),
+    ];
 
-    public IReadOnlyList<ProviderOption> TargetOptions { get; } = new[]
-    {
-        new ProviderOption("file", "CSV file to write, or '-' for standard output.", required: true),
-        new ProviderOption("delimiter", "Field delimiter.", defaultValue: ","),
-        new ProviderOption("overwrite", "Replace the file if it already exists.", defaultValue: "false"),
-    };
+    public IReadOnlyList<ProviderOption> TargetOptions { get; } =
+    [
+        new ProviderOption("file", "CSV file to write, or '-' for standard output.", IsRequired: true),
+        new ProviderOption("delimiter", "Field delimiter.", DefaultValue: ","),
+        new ProviderOption("overwrite", "Replace the file if it already exists.", DefaultValue: "false"),
+    ];
 
     public ICredentialSource OpenSource(ProviderContext context) =>
         new Source(context.GetRequired("file"), GetDelimiter(context));

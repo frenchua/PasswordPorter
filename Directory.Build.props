@@ -1,24 +1,12 @@
 <Project>
   <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <ImplicitUsings>disable</ImplicitUsings>
+    <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Deterministic>true</Deterministic>
     <Version>0.1.0</Version>
     <Authors>Joshua French</Authors>
     <Product>PasswordPorter</Product>
-    <!-- Run 64-bit wherever possible: Firefox's nss3.dll is 64-bit on modern Windows. -->
-    <Prefer32Bit>false</Prefer32Bit>
-  </PropertyGroup>
-
-  <!-- Target both the .NET Framework that ships with Windows and modern .NET. -->
-  <PropertyGroup>
-    <TargetFrameworks>net48;net10.0</TargetFrameworks>
-  </PropertyGroup>
-
-  <!-- The net48 BCL has no nullability annotations, so flow analysis there only produces noise.
-       net10.0 builds still get full nullable checking. -->
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
-    <Nullable>annotations</Nullable>
   </PropertyGroup>
 </Project>

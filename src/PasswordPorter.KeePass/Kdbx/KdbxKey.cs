@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
@@ -45,7 +41,7 @@ public sealed class KdbxKey
         {
             var text = Encoding.ASCII.GetString(data);
             if (text.All(Uri.IsHexDigit))
-                return CryptoUtil.FromHex(text);
+                return Convert.FromHexString(text);
         }
         return CryptoUtil.Sha256(data);
     }
@@ -74,12 +70,12 @@ public sealed class KdbxKey
         if (version != null && version.StartsWith("2."))
         {
             var hex = new string(dataElement.Value.Where(c => !char.IsWhiteSpace(c)).ToArray());
-            var key = CryptoUtil.FromHex(hex);
+            var key = Convert.FromHexString(hex);
             var expected = dataElement.Attribute("Hash")?.Value;
             if (expected != null)
             {
-                var actual = CryptoUtil.Sha256(key).Take(4).ToArray();
-                if (!CryptoUtil.FixedTimeEquals(actual, CryptoUtil.FromHex(expected.Trim())))
+                var actual = CryptoUtil.Sha256(key)[..4];
+                if (!CryptographicOperations.FixedTimeEquals(actual, Convert.FromHexString(expected.Trim())))
                     throw new KdbxFormatException("The key file's checksum does not match; the file is corrupt.");
             }
             return key;
@@ -92,10 +88,10 @@ public sealed class KdbxKey
     /// <summary>Writes a new random KeePass 2.0-format XML key file.</summary>
     public static void CreateKeyFile(string path)
     {
-        var key = CryptoUtil.RandomBytes(32);
-        var hex = CryptoUtil.ToHex(key).ToUpperInvariant();
+        var key = RandomNumberGenerator.GetBytes(32);
+        var hex = Convert.ToHexString(key);
         var grouped = string.Join(" ", Enumerable.Range(0, 8).Select(i => hex.Substring(i * 8, 8)));
-        var hash = CryptoUtil.ToHex(CryptoUtil.Sha256(key).Take(4).ToArray()).ToUpperInvariant();
+        var hash = Convert.ToHexString(CryptoUtil.Sha256(key), 0, 4);
         var doc = new XDocument(
             new XDeclaration("1.0", "utf-8", null),
             new XElement("KeyFile",

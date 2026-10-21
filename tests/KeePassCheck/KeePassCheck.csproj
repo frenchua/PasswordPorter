@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only helper: wraps KeePassLib from the real KeePass.exe so the .NET 10 tests can check our
+    KDBX files against KeePass itself. KeePassLib uses .NET Framework-only APIs (ProtectedMemory),
+    so this one project targets net48 and runs as a separate process. It is never shipped.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <KeePassExe Condition="'$(KeePassExe)' == ''">$(MSBuildThisFileDirectory)..\..\KeePass-2.61.1\KeePass.exe</KeePassExe>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(KeePassExe)')">
+    <Reference Include="KeePass">
+      <HintPath>$(KeePassExe)</HintPath>
+    </Reference>
+  </ItemGroup>
+  <PropertyGroup Condition="Exists('$(KeePassExe)')">
+    <DefineConstants>$(DefineConstants);HAVE_KEEPASSLIB</DefineConstants>
+  </PropertyGroup>
+
+</Project>

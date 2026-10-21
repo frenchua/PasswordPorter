@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using PasswordPorter.KeePass.Kdbx;
 using PasswordPorter.Providers;
 
@@ -17,26 +13,26 @@ public sealed class KeePassProvider : ICredentialSourceProvider, ICredentialTarg
         "keepass", "KeePass (KDBX)", ProviderKind.PasswordManager,
         "KeePass 2.x / KeePassXC database. Reads KDBX 3.1 and 4.x; adds to existing databases or creates KDBX 4 ones.");
 
-    public IReadOnlyList<ProviderOption> SourceOptions { get; } = new[]
-    {
-        new ProviderOption("file", "The .kdbx file.", required: true),
-        new ProviderOption("password", "Master password.", secret: true),
+    public IReadOnlyList<ProviderOption> SourceOptions { get; } =
+    [
+        new ProviderOption("file", "The .kdbx file.", IsRequired: true),
+        new ProviderOption("password", "Master password.", IsSecret: true),
         new ProviderOption("keyfile", "Key file, if the database uses one."),
-    };
+    ];
 
-    public IReadOnlyList<ProviderOption> TargetOptions { get; } = new[]
-    {
-        new ProviderOption("file", "The .kdbx file. Created if it does not exist, otherwise added to.", required: true),
-        new ProviderOption("password", "Master password.", secret: true),
+    public IReadOnlyList<ProviderOption> TargetOptions { get; } =
+    [
+        new ProviderOption("file", "The .kdbx file. Created if it does not exist, otherwise added to.", IsRequired: true),
+        new ProviderOption("password", "Master password.", IsSecret: true),
         new ProviderOption("keyfile", "Key file, if the database uses (or should use) one."),
-        new ProviderOption("group", "Group to put imported entries in ('/' separates levels; empty = top level).", defaultValue: "Imported"),
-        new ProviderOption("duplicates", "skip: don't add entries whose URL, username and password already exist anywhere in the database; add: add them anyway.", defaultValue: "skip"),
-        new ProviderOption("backup", "Keep the previous version of an existing database as <file>.bak.", defaultValue: "true"),
-        new ProviderOption("kdf", "New databases only: argon2id, argon2d or aes.", defaultValue: "argon2id"),
+        new ProviderOption("group", "Group to put imported entries in ('/' separates levels; empty = top level).", DefaultValue: "Imported"),
+        new ProviderOption("duplicates", "skip: don't add entries whose URL, username and password already exist anywhere in the database; add: add them anyway.", DefaultValue: "skip"),
+        new ProviderOption("backup", "Keep the previous version of an existing database as <file>.bak.", DefaultValue: "true"),
+        new ProviderOption("kdf", "New databases only: argon2id, argon2d or aes.", DefaultValue: "argon2id"),
         new ProviderOption("kdf-iterations", "New databases only: Argon2 passes (or AES-KDF rounds)."),
-        new ProviderOption("kdf-memory", "New databases only: Argon2 memory in MiB.", defaultValue: "64"),
-        new ProviderOption("kdf-parallelism", "New databases only: Argon2 parallelism.", defaultValue: "2"),
-    };
+        new ProviderOption("kdf-memory", "New databases only: Argon2 memory in MiB.", DefaultValue: "64"),
+        new ProviderOption("kdf-parallelism", "New databases only: Argon2 parallelism.", DefaultValue: "2"),
+    ];
 
     public ICredentialSource OpenSource(ProviderContext context)
     {

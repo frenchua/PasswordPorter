@@ -59,7 +59,7 @@ nunit-*.xml
 # Visual Studio
 .vs/
 
-# Local KeePass copy used by the net48 interop tests
+# Local KeePass copy used by the KeePassCheck interop tests
 KeePass-*/
 KeePass-*.zip
 

@@ -18,13 +18,13 @@ public class CryptoTests
     public void Blake2b_Abc() =>
         Assert.Equal(
             "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923",
-            CryptoUtil.ToHex(Blake2b.Hash(Encoding.ASCII.GetBytes("abc"), 64)));
+            Convert.ToHexStringLower(Blake2b.Hash(Encoding.ASCII.GetBytes("abc"), 64)));
 
     [Fact]
     public void Blake2b_Empty() =>
         Assert.Equal(
             "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce",
-            CryptoUtil.ToHex(Blake2b.Hash(new byte[0], 64)));
+            Convert.ToHexStringLower(Blake2b.Hash(new byte[0], 64)));
 
     // RFC 9106 section 5 test vectors.
     [Theory]
@@ -35,7 +35,7 @@ public class CryptoTests
     {
         var tag = Argon2.Hash((Argon2Type)type, Repeat(1, 32), Repeat(2, 16), parallelism: 4, memoryKiB: 32, iterations: 3,
             version: 0x13, tagLength: 32, secret: Repeat(3, 8), associatedData: Repeat(4, 12));
-        Assert.Equal(expected, CryptoUtil.ToHex(tag));
+        Assert.Equal(expected, Convert.ToHexStringLower(tag));
     }
 
     [Fact]
@@ -43,10 +43,10 @@ public class CryptoTests
     {
         var key = new byte[32];
         for (int i = 0; i < 32; i++) key[i] = (byte)i;
-        var nonce = CryptoUtil.FromHex("000000000000004a00000000");
+        var nonce = Convert.FromHexString("000000000000004a00000000");
         var data = Encoding.ASCII.GetBytes("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
         new ChaCha20(key, nonce, counter: 1).Transform(data);
-        Assert.StartsWith("6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b", CryptoUtil.ToHex(data));
+        Assert.StartsWith("6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b", Convert.ToHexStringLower(data));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class CryptoTests
         new Salsa20(key, new byte[8]).Transform(data);
         Assert.Equal(
             "e3be8fdd8beca2e3ea8ef9475b29a6e7003951e1097a5c38d23b7a5fad9f6844b22c97559e2723c7cbbd3fe4fc8d9a0744652a83e72a9c461876af4d7ef1a117",
-            CryptoUtil.ToHex(data));
+            Convert.ToHexStringLower(data));
     }
 
     [Fact]

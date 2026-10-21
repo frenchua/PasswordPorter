@@ -9,23 +9,24 @@ dotnet build PasswordPorter.sln
 dotnet test PasswordPorter.sln
 ```
 
-- Every project targets `net48` (the .NET Framework shipped with Windows) and `net10.0`.
-  Code must compile for both: no `Span`, `System.Text.Json`, `init`/records, `^`/`..` ranges,
-  `SHA256.HashData`, `Convert.ToHexString`, etc. Use the helpers in `KeePass/Crypto/CryptoUtil.cs`
-  and `Core/Text/SimpleJson.cs` instead. Nullable warnings are only analysed on net10.0.
-- The net48 test run also references `KeePass-2.61.1/KeePass.exe` (git-ignored, optional) and
-  cross-checks our KDBX output against real KeePassLib (`KeePassLibInteropTests`, `HAVE_KEEPASSLIB`).
+- Everything targets `net10.0` (set once in `Directory.Build.props`), with implicit usings and
+  nullable reference types on. Prefer BCL APIs (`System.Text.Json`, `BinaryPrimitives`,
+  `RandomNumberGenerator`, `CryptographicOperations`, `Convert.FromHexString`...) over hand-rolled helpers.
+- `tests/KeePassCheck` is the one exception: a test-only `net48` console app that wraps KeePassLib
+  from `KeePass-2.61.1/KeePass.exe` (git-ignored, optional). KeePassLib needs .NET Framework APIs,
+  so `KeePassLibInteropTests` run the helper as a separate process to cross-check our KDBX files
+  against real KeePass. Without KeePass.exe those tests are compiled out (`HAVE_KEEPASSCHECK`).
 - `FirefoxNssTests` use the installed Firefox's NSS on a throwaway profile; they no-op if Firefox
   is absent. Never point tests at a real profile.
 
 ## Layout
 
 - `src/PasswordPorter.Core` – `Credential` model, provider interfaces (`Providers/Abstractions.cs`),
-  `ProviderContext` (options + secret resolution), `ProviderRegistry`, CSV provider, JSON/CSV helpers.
-- `src/PasswordPorter.Firefox` – reads `logins.json` and decrypts with Firefox's own `nss3`
-  (bound at runtime via function pointers; works on both TFMs).
+  `ProviderContext` (options + secret resolution), `ProviderRegistry`, CSV provider and helpers.
+- `src/PasswordPorter.Firefox` – reads `logins.json` (System.Text.Json source generator) and decrypts
+  with Firefox's own `nss3`, loaded via `NativeLibrary` and called through unmanaged function pointers.
 - `src/PasswordPorter.KeePass` – dependency-free KDBX 3.1/4.x read/write (`Kdbx/`) and the
-  primitives net48 lacks (`Crypto/`: BLAKE2b, Argon2, ChaCha20, Salsa20).
+  primitives .NET has no API for (`Crypto/`: BLAKE2b, Argon2, raw ChaCha20 and Salsa20 streams).
 - `src/PasswordPorter.Cli` – `pwport` front end; providers are registered in `Program.CreateRegistry`.
 - `archive/first-attempt` – the original pre-rewrite P/Invoke experiment, not built.
 

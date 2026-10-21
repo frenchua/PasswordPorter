@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Text;
 using PasswordPorter.KeePass.Crypto;
 
@@ -56,7 +53,7 @@ internal sealed class ByteReader
     public uint ReadUInt32()
     {
         Need(4);
-        var v = CryptoUtil.ReadUInt32(data, Position);
+        var v = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(Position));
         Position += 4;
         return v;
     }
@@ -144,11 +141,11 @@ internal sealed class VariantDictionary
             var value = r.ReadBytes(r.ReadInt32());
             switch ((ValueType)type)
             {
-                case ValueType.UInt32: dict.Set(key, ValueType.UInt32, CryptoUtil.ReadUInt32(Check(value, 4), 0)); break;
-                case ValueType.UInt64: dict.Set(key, ValueType.UInt64, CryptoUtil.ReadUInt64(Check(value, 8), 0)); break;
+                case ValueType.UInt32: dict.Set(key, ValueType.UInt32, BinaryPrimitives.ReadUInt32LittleEndian(Check(value, 4))); break;
+                case ValueType.UInt64: dict.Set(key, ValueType.UInt64, BinaryPrimitives.ReadUInt64LittleEndian(Check(value, 8))); break;
                 case ValueType.Bool: dict.Set(key, ValueType.Bool, Check(value, 1)[0] != 0); break;
-                case ValueType.Int32: dict.Set(key, ValueType.Int32, (int)CryptoUtil.ReadUInt32(Check(value, 4), 0)); break;
-                case ValueType.Int64: dict.Set(key, ValueType.Int64, (long)CryptoUtil.ReadUInt64(Check(value, 8), 0)); break;
+                case ValueType.Int32: dict.Set(key, ValueType.Int32, (int)BinaryPrimitives.ReadUInt32LittleEndian(Check(value, 4))); break;
+                case ValueType.Int64: dict.Set(key, ValueType.Int64, (long)BinaryPrimitives.ReadUInt64LittleEndian(Check(value, 8))); break;
                 case ValueType.String: dict.Set(key, ValueType.String, Encoding.UTF8.GetString(value)); break;
                 case ValueType.ByteArray: dict.Set(key, ValueType.ByteArray, value); break;
                 default: throw new KdbxFormatException($"Unknown VariantDictionary value type 0x{type:X2}.");
@@ -194,13 +191,13 @@ internal sealed class VariantDictionary
 /// <summary>Well-known KDBX UUIDs (stored as raw 16-byte arrays in the file).</summary>
 internal static class KdbxUuids
 {
-    public static readonly byte[] CipherAes256 = CryptoUtil.FromHex("31c1f2e6bf714350be5805216afc5aff");
-    public static readonly byte[] CipherChaCha20 = CryptoUtil.FromHex("d6038a2b8b6f4cb5a524339a31dbb59a");
-    public static readonly byte[] CipherTwofish = CryptoUtil.FromHex("ad68f29f576f4bb9a36ad47af965346c");
+    public static readonly byte[] CipherAes256 = Convert.FromHexString("31c1f2e6bf714350be5805216afc5aff");
+    public static readonly byte[] CipherChaCha20 = Convert.FromHexString("d6038a2b8b6f4cb5a524339a31dbb59a");
+    public static readonly byte[] CipherTwofish = Convert.FromHexString("ad68f29f576f4bb9a36ad47af965346c");
 
-    public static readonly byte[] KdfAes = CryptoUtil.FromHex("c9d9f39a628a4460bf740d08c18a4fea");
-    public static readonly byte[] KdfArgon2d = CryptoUtil.FromHex("ef636ddf8c29444b91f7a9a403e30a0c");
-    public static readonly byte[] KdfArgon2id = CryptoUtil.FromHex("9e298b1956db4773b23dfc3ec6f0a1e6");
+    public static readonly byte[] KdfAes = Convert.FromHexString("c9d9f39a628a4460bf740d08c18a4fea");
+    public static readonly byte[] KdfArgon2d = Convert.FromHexString("ef636ddf8c29444b91f7a9a403e30a0c");
+    public static readonly byte[] KdfArgon2id = Convert.FromHexString("9e298b1956db4773b23dfc3ec6f0a1e6");
 
-    public static bool Equal(byte[]? a, byte[] b) => a != null && CryptoUtil.FixedTimeEquals(a, b);
+    public static bool Equal(byte[]? a, byte[] b) => a != null && CryptographicOperations.FixedTimeEquals(a, b);
 }

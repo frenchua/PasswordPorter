@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
 using PasswordPorter.Providers;
 
 namespace PasswordPorter.Firefox;
@@ -71,11 +66,11 @@ public static class FirefoxProfiles
     static IEnumerable<string> ProfileRoots()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        if (OperatingSystem.IsWindows())
         {
             yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Mozilla", "Firefox");
         }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        else if (OperatingSystem.IsMacOS())
         {
             yield return Path.Combine(home, "Library", "Application Support", "Firefox");
         }

@@ -1,6 +1,3 @@
-using System;
-using System.IO;
-
 namespace PasswordPorter.Tests;
 
 internal sealed class TempDir : IDisposable

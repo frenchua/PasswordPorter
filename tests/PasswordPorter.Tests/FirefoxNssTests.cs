@@ -1,6 +1,3 @@
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using PasswordPorter.Firefox;
 using PasswordPorter.Firefox.Native;
 using PasswordPorter.Providers;

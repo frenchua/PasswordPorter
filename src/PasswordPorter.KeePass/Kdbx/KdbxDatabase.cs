@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.IO.Compression;
-using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
@@ -159,7 +155,7 @@ public sealed class KdbxDatabase
             switch (id)
             {
                 case 2: cipherId = data; break;
-                case 3: compression = CryptoUtil.ReadUInt32(data, 0); break;
+                case 3: compression = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0)); break;
                 case 4: masterSeed = data; break;
                 case 7: iv = data; break;
                 case 11: kdf = VariantDictionary.Deserialize(data); break;
@@ -172,7 +168,7 @@ public sealed class KdbxDatabase
 
         var header = new byte[headerLength];
         Buffer.BlockCopy(file, 0, header, 0, headerLength);
-        if (!CryptoUtil.FixedTimeEquals(r.ReadBytes(32), CryptoUtil.Sha256(header)))
+        if (!CryptographicOperations.FixedTimeEquals(r.ReadBytes(32), CryptoUtil.Sha256(header)))
             throw new KdbxFormatException("The database header is corrupt (checksum mismatch).");
         var headerHmac = r.ReadBytes(32);
 
@@ -181,7 +177,7 @@ public sealed class KdbxDatabase
         var hmacKey = CryptoUtil.Sha512(masterSeed, transformed, new byte[] { 1 });
         Array.Clear(transformed, 0, transformed.Length);
 
-        if (!CryptoUtil.FixedTimeEquals(headerHmac, CryptoUtil.HmacSha256(BlockHmacKey(ulong.MaxValue, hmacKey), header)))
+        if (!CryptographicOperations.FixedTimeEquals(headerHmac, CryptoUtil.HmacSha256(BlockHmacKey(ulong.MaxValue, hmacKey), header)))
             throw new KdbxInvalidKeyException();
 
         var cipherText = ReadHmacBlocks(r, hmacKey);
@@ -201,7 +197,7 @@ public sealed class KdbxDatabase
             if (id == 0) break;
             switch (id)
             {
-                case 1: streamId = CryptoUtil.ReadUInt32(data, 0); break;
+                case 1: streamId = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0)); break;
                 case 2: streamKey = data; break;
                 case 3:
                     if (data.Length < 1) throw new KdbxFormatException("Invalid attachment in the inner header.");
@@ -241,14 +237,14 @@ public sealed class KdbxDatabase
             switch (id)
             {
                 case 2: cipherId = data; break;
-                case 3: compression = CryptoUtil.ReadUInt32(data, 0); break;
+                case 3: compression = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0)); break;
                 case 4: masterSeed = data; break;
                 case 5: transformSeed = data; break;
-                case 6: rounds = CryptoUtil.ReadUInt64(data, 0); break;
+                case 6: rounds = BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(0)); break;
                 case 7: iv = data; break;
                 case 8: streamKey = data; break;
                 case 9: startBytes = data; break;
-                case 10: streamId = CryptoUtil.ReadUInt32(data, 0); break;
+                case 10: streamId = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0)); break;
             }
         }
         int headerLength = r.Position;
@@ -273,7 +269,7 @@ public sealed class KdbxDatabase
         {
             throw new KdbxInvalidKeyException();
         }
-        if (!CryptoUtil.StartsWith(plain, 0, startBytes))
+        if (!plain.AsSpan().StartsWith(startBytes))
             throw new KdbxInvalidKeyException();
 
         var payload = ReadHashedBlocks(plain, startBytes.Length);
@@ -292,7 +288,7 @@ public sealed class KdbxDatabase
         Buffer.BlockCopy(file, 0, header, 0, headerLength);
         var storedHash = db.Meta.Element("HeaderHash")?.Value;
         if (!string.IsNullOrEmpty(storedHash) &&
-            !CryptoUtil.FixedTimeEquals(Convert.FromBase64String(storedHash), CryptoUtil.Sha256(header)))
+            !CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(storedHash), CryptoUtil.Sha256(header)))
             throw new KdbxFormatException("The database header has been modified or is corrupt (HeaderHash mismatch).");
 
         Unprotect(doc, CreateInnerStream(streamId, streamKey));
@@ -340,10 +336,10 @@ public sealed class KdbxDatabase
 
     byte[] Save4(KdbxKey key)
     {
-        var masterSeed = CryptoUtil.RandomBytes(32);
-        var iv = CryptoUtil.RandomBytes(KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20) ? 12 : 16);
+        var masterSeed = RandomNumberGenerator.GetBytes(32);
+        var iv = RandomNumberGenerator.GetBytes(KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20) ? 12 : 16);
         KdbxKdf.Reseed(kdfParameters);
-        var innerKey = CryptoUtil.RandomBytes(64);
+        var innerKey = RandomNumberGenerator.GetBytes(64);
 
         byte[] header;
         using (var h = new MemoryStream())
@@ -401,11 +397,11 @@ public sealed class KdbxDatabase
         if (!KdbxUuids.Equal(kdfParameters.GetBytes("$UUID"), KdbxUuids.KdfAes))
             throw new InvalidOperationException("KDBX 3.1 databases must use AES-KDF.");
 
-        var masterSeed = CryptoUtil.RandomBytes(32);
-        var iv = CryptoUtil.RandomBytes(KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20) ? 12 : 16);
+        var masterSeed = RandomNumberGenerator.GetBytes(32);
+        var iv = RandomNumberGenerator.GetBytes(KdbxUuids.Equal(cipherId, KdbxUuids.CipherChaCha20) ? 12 : 16);
         KdbxKdf.Reseed(kdfParameters);
-        var streamKey = CryptoUtil.RandomBytes(32);
-        var startBytes = CryptoUtil.RandomBytes(32);
+        var streamKey = RandomNumberGenerator.GetBytes(32);
+        var startBytes = RandomNumberGenerator.GetBytes(32);
 
         byte[] header;
         using (var h = new MemoryStream())
@@ -554,7 +550,7 @@ public sealed class KdbxDatabase
                 var bytes = Convert.FromBase64String(text);
                 if (bytes.Length == 8)
                 {
-                    var seconds = (long)CryptoUtil.ReadUInt64(bytes, 0);
+                    var seconds = (long)BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(0));
                     if (seconds >= 0 && seconds <= DateTime.MaxValue.Ticks / TimeSpan.TicksPerSecond)
                         return new DateTime(seconds * TimeSpan.TicksPerSecond, DateTimeKind.Utc);
                 }
@@ -582,7 +578,7 @@ public sealed class KdbxDatabase
             var data = r.ReadBytes(size);
             var expected = CryptoUtil.HmacSha256(BlockHmacKey(index, hmacKey),
                 CryptoUtil.UInt64Bytes(index), CryptoUtil.UInt32Bytes((uint)size), data);
-            if (!CryptoUtil.FixedTimeEquals(mac, expected))
+            if (!CryptographicOperations.FixedTimeEquals(mac, expected))
                 throw new KdbxFormatException("The database is corrupt (block authentication failed).");
             if (size == 0)
                 return ms.ToArray();
@@ -628,7 +624,7 @@ public sealed class KdbxDatabase
                 return ms.ToArray();
             }
             var block = r.ReadBytes(size);
-            if (!CryptoUtil.FixedTimeEquals(hash, CryptoUtil.Sha256(block)))
+            if (!CryptographicOperations.FixedTimeEquals(hash, CryptoUtil.Sha256(block)))
                 throw new KdbxFormatException("The database is corrupt (block hash mismatch).");
             ms.Write(block, 0, size);
         }

@@ -1,5 +1,3 @@
-using System.IO;
-using System.Linq;
 using PasswordPorter.KeePass.Kdbx;
 using Xunit;
 

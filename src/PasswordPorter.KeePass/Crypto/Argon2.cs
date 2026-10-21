@@ -1,6 +1,3 @@
-using System;
-using System.Threading.Tasks;
-
 namespace PasswordPorter.KeePass.Crypto;
 
 internal enum Argon2Type
@@ -51,8 +48,8 @@ internal static class Argon2
         {
             for (uint j = 0; j < 2; j++)
             {
-                CryptoUtil.WriteUInt32(seed, 64, j);
-                CryptoUtil.WriteUInt32(seed, 68, lane);
+                BinaryPrimitives.WriteUInt32LittleEndian(seed.AsSpan(64), j);
+                BinaryPrimitives.WriteUInt32LittleEndian(seed.AsSpan(68), lane);
                 var block = HPrime(seed, 1024);
                 inst.LoadBlock(lane * inst.LaneLength + j, block);
             }
@@ -82,7 +79,7 @@ internal static class Argon2
         }
         var finalBytes = new byte[1024];
         for (int k = 0; k < BlockWords; k++)
-            CryptoUtil.WriteUInt64(finalBytes, k * 8, final[k]);
+            BinaryPrimitives.WriteUInt64LittleEndian(finalBytes.AsSpan(k * 8), final[k]);
 
         var tag = HPrime(finalBytes, tagLength);
         Array.Clear(inst.Memory, 0, inst.Memory.Length);
@@ -150,7 +147,7 @@ internal static class Argon2
         {
             long off = (long)index * BlockWords;
             for (int k = 0; k < BlockWords; k++)
-                Memory[off + k] = CryptoUtil.ReadUInt64(block, k * 8);
+                Memory[off + k] = BinaryPrimitives.ReadUInt64LittleEndian(block.AsSpan(k * 8));
         }
 
         public void FillSegment(uint pass, uint lane, uint slice)
@@ -301,14 +298,12 @@ internal static class Argon2
     static void GB(ref ulong a, ref ulong b, ref ulong c, ref ulong d)
     {
         a = a + b + 2 * (a & 0xFFFFFFFF) * (b & 0xFFFFFFFF);
-        d = RotR(d ^ a, 32);
+        d = BitOperations.RotateRight(d ^ a, 32);
         c = c + d + 2 * (c & 0xFFFFFFFF) * (d & 0xFFFFFFFF);
-        b = RotR(b ^ c, 24);
+        b = BitOperations.RotateRight(b ^ c, 24);
         a = a + b + 2 * (a & 0xFFFFFFFF) * (b & 0xFFFFFFFF);
-        d = RotR(d ^ a, 16);
+        d = BitOperations.RotateRight(d ^ a, 16);
         c = c + d + 2 * (c & 0xFFFFFFFF) * (d & 0xFFFFFFFF);
-        b = RotR(b ^ c, 63);
+        b = BitOperations.RotateRight(b ^ c, 63);
     }
-
-    static ulong RotR(ulong x, int n) => (x >> n) | (x << (64 - n));
 }
