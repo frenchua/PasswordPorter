@@ -148,6 +148,84 @@ public class ProviderTests
         Assert.Equal("example.com", c.DisplayTitle);
     }
 
+    /// <summary>Records warnings and never supplies a secret, for asserting on provider messages.</summary>
+    sealed class RecordingInteraction : IUserInteraction
+    {
+        public List<string> Warnings { get; } = [];
+        public string? PromptSecret(string prompt, bool confirm) => null;
+        public void Warn(string message) => Warnings.Add(message);
+    }
+
+    static IReadOnlyList<Credential> ReadCsv(string file, RecordingInteraction? interaction = null)
+    {
+        var provider = new CsvProvider();
+        using var s = provider.OpenSource(new ProviderContext(provider.SourceOptions, Opts($"file={file}"), interaction));
+        return s.ReadCredentials();
+    }
+
+    [Fact]
+    public void Csv_ReadsChromeExportColumns_AndExportsToKeePass()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("Chrome Passwords.csv");
+        // Chrome/Edge export this exact header. Rows exercise a quoted comma, an embedded newline in a
+        // note, unicode, and an empty username (Chrome leaves the field blank).
+        File.WriteAllText(file,
+            "name,url,username,password,note\r\n" +
+            "github.com,https://github.com/,me,\"pa,ss\",\r\n" +
+            "example.com,https://example.com/,alice,s3cret ☃,\"line1\r\nline2\"\r\n" +
+            "router,http://192.168.1.1/,,admin,\r\n");
+
+        var creds = ReadCsv(file);
+        Assert.Equal(3, creds.Count);
+
+        var github = creds.Single(c => c.Url == "https://github.com/");
+        Assert.Equal("github.com", github.DisplayTitle);
+        Assert.Equal("me", github.Username);
+        Assert.Equal("pa,ss", github.Password);
+
+        var example = creds.Single(c => c.Username == "alice");
+        Assert.Equal("s3cret ☃", example.Password);
+        Assert.Equal("line1\r\nline2", example.Notes);
+
+        var router = creds.Single(c => c.Password == "admin");
+        Assert.Null(router.Username);
+
+        // End to end: the Chrome export lands in a KeePass database unchanged.
+        var kdbx = dir.File("out.kdbx");
+        Assert.Equal(3, WriteKeePass(kdbx, creds).Added);
+        var back = ReadKeePass(kdbx);
+        Assert.Equal("s3cret ☃", back.Single(c => c.Title == "example.com").Password);
+        Assert.Equal("line1\r\nline2", back.Single(c => c.Title == "example.com").Notes);
+    }
+
+    [Fact]
+    public void Csv_ReadsEdgeExportWithoutNoteColumn()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("Microsoft Edge Passwords.csv");
+        // Older Chromium exports omit the note column entirely.
+        File.WriteAllText(file,
+            "name,url,username,password\r\n" +
+            "example.com,https://example.com/,bob,pw\r\n");
+        var c = ReadCsv(file).Single();
+        Assert.Equal("example.com", c.DisplayTitle);
+        Assert.Equal("bob", c.Username);
+        Assert.Equal("pw", c.Password);
+        Assert.Null(c.Notes);
+    }
+
+    [Fact]
+    public void Csv_Read_WarnsAboutClearText()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("export.csv");
+        File.WriteAllText(file, "name,url,username,password\r\nx,https://x.example/,u,p\r\n");
+        var interaction = new RecordingInteraction();
+        ReadCsv(file, interaction);
+        Assert.Contains(interaction.Warnings, w => w.Contains("clear text"));
+    }
+
     [Fact]
     public void FirefoxLogins_ParsesLoginsJson()
     {

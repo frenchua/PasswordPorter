@@ -33,6 +33,15 @@ dotnet test PasswordPorter.sln
 - `src/PasswordPorter.Cli` – `pwport` front end; providers are registered in `Program.CreateRegistry`.
 - `archive/first-attempt` – the original pre-rewrite P/Invoke experiment, not built.
 
+## Chrome / Edge
+
+There is deliberately no Chromium provider. Chrome 127+ and current Edge protect every saved password
+with App-Bound Encryption (the `v20` prefix in `Login Data`), decryptable only by the browser itself;
+the only bypasses are the browser-impersonation techniques infostealer malware uses, which this project
+won't implement. (Verified on this machine: a read-only probe of real `Login Data` found all `v20`, no
+`v10`.) The supported route is the browser's own CSV export read through the `csv` provider — see README.
+`CsvProvider`'s column aliases already map Chrome/Edge's `name,url,username,password,note` header.
+
 ## Adding a provider (e.g. Chrome, Bitwarden)
 
 1. New project `src/PasswordPorter.<Name>` referencing Core (copy an existing csproj).

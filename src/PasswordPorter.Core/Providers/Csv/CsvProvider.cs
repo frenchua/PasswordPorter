@@ -32,6 +32,8 @@ public sealed class CsvProvider : ICredentialSourceProvider, ICredentialTargetPr
         var file = context.GetRequired("file");
         if (file != StdIo && !File.Exists(file))
             throw new ProviderException($"File not found: {file}");
+        if (file != StdIo)
+            context.Interaction.Warn("This CSV holds passwords in clear text (e.g. a browser export). Delete it securely once you are done.");
         return new Source(file, GetDelimiter(context));
     }
 

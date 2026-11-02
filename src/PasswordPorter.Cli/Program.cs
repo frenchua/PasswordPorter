@@ -73,6 +73,10 @@ internal static class Program
               pwport export firefox keepass -i profile=default-release -o file=Passwords.kdbx -o group=Browsers/Firefox
               pwport export keepass csv -i file=Passwords.kdbx -o file=-
 
+            Chrome / Edge: export passwords from the browser to a CSV first (the browser decrypts them),
+            then import that file. Delete the CSV afterwards -- it holds your passwords in clear text.
+              pwport export csv keepass -i file="Chrome Passwords.csv" -o file=Passwords.kdbx -o group=Browsers/Chrome
+
             """);
         Console.WriteLine($"Providers: {string.Join(", ", registry.Providers.Select(p => p.Info.Id))}");
         return ExitOk;
